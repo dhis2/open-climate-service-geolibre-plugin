@@ -752,14 +752,16 @@ function renderPanel(container: HTMLElement): () => void {
   });
   urlRow.appendChild(el("label", "ocs-field-label", "Open Climate Service URL"));
   urlRow.appendChild(urlInput);
-  urlRow.appendChild(button("Connect", () => void connect(urlInput.value)));
-  const demo = el("button", "ocs-link", "Try the Nepal demo instance");
-  demo.type = "button";
-  demo.addEventListener("click", () => {
+  const actions = el("div", "ocs-actions");
+  actions.appendChild(button("Connect", () => void connect(urlInput.value)));
+  const demo = button("Try Nepal demo", () => {
     urlInput.value = DEMO_URL;
     void connect(DEMO_URL);
   });
-  urlRow.appendChild(demo);
+  demo.classList.add("ocs-btn-secondary");
+  demo.title = DEMO_URL;
+  actions.appendChild(demo);
+  urlRow.appendChild(actions);
   root.appendChild(urlRow);
 
   const status = el("div", "ocs-status");

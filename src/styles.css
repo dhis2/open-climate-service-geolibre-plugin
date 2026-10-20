@@ -60,22 +60,20 @@
   background: #1d4ed8;
 }
 
-/* A text-style button for secondary actions (e.g. connecting to the demo instance). */
-.ocs-link {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-  text-decoration: underline;
-  opacity: 0.75;
-  cursor: pointer;
+.ocs-actions {
+  display: flex;
+  gap: 8px;
 }
 
-.ocs-link:hover {
-  opacity: 1;
+/* Secondary action next to Connect: neutral, theme-agnostic outline. */
+.ocs-btn.ocs-btn-secondary {
+  background: transparent;
+  color: inherit;
+  box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.5);
+}
+
+.ocs-btn.ocs-btn-secondary:hover {
+  background: rgba(128, 128, 128, 0.15);
 }
 
 .ocs-vectors {

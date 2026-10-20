@@ -27,8 +27,8 @@ GeoLibre go to **Settings → Manage Plugins → Install from file** and select 
 
 1. Activate **Open Climate Service** from GeoLibre's **Plugins** menu.
 2. In the panel, enter your OCS instance URL and click **Connect** — the map frames the
-   instance's region. To try the plugin without your own instance, click **Try the Nepal demo
-   instance**, which connects to the public demo at <https://ocs-demo-nepal.dhis2.org/>.
+   instance's region. To try the plugin without your own instance, click **Try Nepal demo**,
+   which connects to the public demo at <https://ocs-demo-nepal.dhis2.org/>.
 3. Pick a dataset to draw it as a layer.
 4. Tick one or more **Boundaries** to draw them on the map.
 5. Step through periods with the **time slider** at the bottom of the map, and adjust the
