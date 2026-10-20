@@ -142,7 +142,28 @@ function buildZarrOptions(spec: RenderSpec): GeoLibreZarrLayerOptions {
     ...(spec.crs ? { crs: spec.crs } : {}),
     ...(spec.proj4 != null ? { proj4: spec.proj4 } : {}),
     ...(spec.bounds ? { bounds: spec.bounds } : {}),
+    ...(lowestVectorLayerId() ? { beforeLayerId: lowestVectorLayerId() } : {}),
   };
+}
+
+/** The bottom-most of our boundary layers, so a raster can be inserted beneath them all. */
+function lowestVectorLayerId(): string | undefined {
+  const ids = [...state.vectors.keys()].map(vectorLayerId);
+  if (ids.length === 0) return undefined;
+  const order = state.app?.getLayers?.();
+  if (!order) return ids[0];
+  return order.find((id) => ids.includes(id)) ?? ids[0];
+}
+
+/** Whether a raster layer sits above any of our boundary layers in the project order. */
+function rasterAboveVectors(rasterLayerId: string): boolean {
+  const order = state.app?.getLayers?.();
+  if (!order) return true; // can't tell: assume the host appended it on top
+  const rasterIndex = order.indexOf(rasterLayerId);
+  return [...state.vectors.keys()].some((id) => {
+    const vectorIndex = order.indexOf(vectorLayerId(id));
+    return vectorIndex >= 0 && rasterIndex > vectorIndex;
+  });
 }
 
 function removeLayer(): void {
@@ -293,7 +314,7 @@ async function rebuildNative(): Promise<void> {
   }
   state.nativeLayerId = await app.addZarrLayer(nativeName(spec), spec.zarrHref, buildZarrOptions(spec));
   bindToTimeSlider(spec, state.nativeLayerId);
-  restackVectorLayers();
+  keepVectorsOnTop(state.nativeLayerId);
 }
 
 async function renderLayer(spec: RenderSpec, bbox: [number, number, number, number] | null): Promise<void> {
@@ -354,7 +375,7 @@ async function renderLayer(spec: RenderSpec, bbox: [number, number, number, numb
     });
     state.layer = layer;
   }
-  restackVectorLayers();
+  keepVectorsOnTop(state.native ? state.nativeLayerId : LAYER_ID);
 
   // Keep the current view while the instance extent is reasonably framed (the user is
   // looking at the country); re-frame the dataset if we've navigated off it or zoomed so
@@ -431,9 +452,16 @@ function registerVectorLayer(spec: VectorSpec): void {
     });
 }
 
-/** Put the boundaries back above the raster. GeoLibre's plugin API has no reorder call,
- * but it appends a newly registered layer on top, so re-registering after the raster
- * is added keeps boundaries visible over climate data. */
+/** Keep boundaries above the raster. The native raster is inserted beneath them through
+ * `beforeLayerId`; only when the host ignored that (GeoLibre before #3140, or the bundled
+ * fallback layer) do we re-register the boundaries on top, which briefly redraws them. */
+function keepVectorsOnTop(rasterLayerId: string | null): void {
+  if (state.vectors.size === 0 || !rasterLayerId) return;
+  if (rasterAboveVectors(rasterLayerId)) restackVectorLayers();
+}
+
+/** Re-register the boundaries so the host appends them on top again. Removes and re-adds
+ * their sources, so the boundaries blink; used only as the fallback above. */
 function restackVectorLayers(): void {
   for (const spec of state.vectors.values()) {
     state.app?.unregisterExternalNativeLayer?.(vectorLayerId(spec.id));
