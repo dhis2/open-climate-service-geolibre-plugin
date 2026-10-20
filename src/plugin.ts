@@ -13,6 +13,7 @@ import {
   type OcsCollectionSummary,
   type RenderSpec,
   type VectorSpec,
+  type VectorStyle,
 } from "./ocs";
 import type { GeoLibreAppAPI, GeoLibrePlugin, GeoLibreTimeGranularity, GeoLibreZarrLayerOptions } from "./types/geolibre";
 
@@ -317,12 +318,18 @@ async function rebuildNative(): Promise<void> {
   keepVectorsOnTop(state.nativeLayerId);
 }
 
-async function renderLayer(spec: RenderSpec, bbox: [number, number, number, number] | null): Promise<void> {
+/** Draw the raster. `isCurrent` reports whether this load is still the one the user wants;
+ * a layer created after it went stale is removed. Returns false when nothing was drawn. */
+async function renderLayer(
+  spec: RenderSpec,
+  bbox: [number, number, number, number] | null,
+  isCurrent: () => boolean = () => true,
+): Promise<boolean> {
   const app = state.app;
   const map = app?.getMap?.();
   if (!app || !map) {
     setStatus("GeoLibre map is not available.", true);
-    return;
+    return false;
   }
   removeLayer();
 
@@ -334,6 +341,10 @@ async function renderLayer(spec: RenderSpec, bbox: [number, number, number, numb
     // bundled second copy, native Layers/Style-panel integration, CRS from proj4.
     state.native = true;
     state.nativeLayerId = await app.addZarrLayer(nativeName(spec), spec.zarrHref, buildZarrOptions(spec));
+    if (!isCurrent()) {
+      removeLayer();
+      return false;
+    }
     bindToTimeSlider(spec, state.nativeLayerId);
   } else {
     // Fallback path (older GeoLibre): our bundled zarr-layer as a custom MapLibre layer,
@@ -382,6 +393,7 @@ async function renderLayer(spec: RenderSpec, bbox: [number, number, number, numb
   // far out it's tiny. Right after connect the view is the instance extent, so selecting a
   // dataset won't jump the camera.
   if (bbox && app.fitBounds && shouldFitToDataset()) app.fitBounds(bbox);
+  return true;
 }
 
 // --- vector layers (feature collections) ------------------------------------
@@ -400,6 +412,11 @@ function pmtilesNativeLayerIds(sourceId: string, sourceLayers: string[]): string
 
 /** Draw a feature collection from its PMTiles archive. GeoLibre renders it natively: the
  * layer gets the host's Layers-panel entry, Style panel and project persistence. */
+// The latest load per collection. Unticking a boundary, switching instance or deactivating
+// invalidates it, so a load that finishes afterwards does not add the layer back.
+const vectorLoads = new Map<string, number>();
+let vectorLoadSeq = 0;
+
 async function addVectorLayer(collectionId: string): Promise<boolean> {
   const app = state.app;
   if (!app?.registerExternalNativeLayer) {
@@ -408,17 +425,29 @@ async function addVectorLayer(collectionId: string): Promise<boolean> {
   }
   // No early return for a layer we think is drawn: the user may have removed it in the
   // Layers panel, and registering the same id again only updates it.
+  const token = ++vectorLoadSeq;
+  vectorLoads.set(collectionId, token);
+  const ocsUrl = state.ocsUrl;
+  const current = () => vectorLoads.get(collectionId) === token && state.ocsUrl === ocsUrl;
   setStatus(`Loading ${collectionId}…`);
   try {
-    const collection = await fetchCollection(state.ocsUrl, collectionId);
+    const collection = await fetchCollection(ocsUrl, collectionId);
     const spec = buildVectorSpec(collection, await fetchVectorStyle(collection));
+    if (!current()) {
+      setStatus("");
+      return false;
+    }
+    vectorLoads.delete(collectionId);
     registerVectorLayer(spec);
     state.vectors.set(collectionId, spec);
     if (!state.spec && spec.bbox && app.fitBounds && shouldFitToDataset()) app.fitBounds(spec.bbox);
     setStatus("");
     return true;
   } catch (err) {
-    setStatus(`Failed to load ${collectionId}: ${(err as Error).message}`, true);
+    if (current()) {
+      vectorLoads.delete(collectionId);
+      setStatus(`Failed to load ${collectionId}: ${(err as Error).message}`, true);
+    }
     return false;
   }
 }
@@ -426,7 +455,11 @@ async function addVectorLayer(collectionId: string): Promise<boolean> {
 /** Register a boundary layer with GeoLibre, which draws it from the PMTiles archive.
  * Boundaries are outlines: the fill layer stays (transparent) so a click inside a
  * polygon still identifies it, and the Style panel can raise its opacity. */
-function registerVectorLayer(spec: VectorSpec): void {
+function registerVectorLayer(
+  spec: VectorSpec,
+  style: VectorStyle = { ...spec.style, fillOpacity: 0 },
+  opacity?: number,
+): void {
   const app = state.app;
   if (!app?.registerExternalNativeLayer) return;
   const id = vectorLayerId(spec.id);
@@ -438,7 +471,8 @@ function registerVectorLayer(spec: VectorSpec): void {
       source: { url: spec.pmtilesHref, sourceLayers: spec.sourceLayers, tileType: "vector", type: "vector" },
       sourcePath: spec.pmtilesHref,
       nativeLayerIds: pmtilesNativeLayerIds(id, spec.sourceLayers),
-      style: { ...spec.style, fillOpacity: 0 },
+      style: { ...style },
+      ...(opacity != null ? { opacity } : {}),
       metadata: {
         sourceKind: "pmtiles-url",
         sourceLayers: spec.sourceLayers,
@@ -464,18 +498,57 @@ function keepVectorsOnTop(rasterLayerId: string | null): void {
  * their sources, so the boundaries blink; used only as the fallback above. */
 function restackVectorLayers(): void {
   for (const spec of state.vectors.values()) {
+    // Carry over what the user set in the Style panel: the host has already applied it to
+    // the native layers, and re-registering from the collection style would discard it.
+    const style = currentVectorStyle(spec);
+    const opacity = state.app?.listLayers?.().find((l) => l.id === vectorLayerId(spec.id))?.opacity;
     state.app?.unregisterExternalNativeLayer?.(vectorLayerId(spec.id));
-    registerVectorLayer(spec);
+    registerVectorLayer(spec, style, opacity);
   }
 }
 
+/** A boundary's paint as it is on the map now, falling back to the collection's outline
+ * style for anything the map does not report as a plain value. */
+function currentVectorStyle(spec: VectorSpec): VectorStyle {
+  const style: VectorStyle = { ...spec.style, fillOpacity: 0 };
+  const map = state.app?.getMap?.();
+  const [fillId, lineId] = pmtilesNativeLayerIds(vectorLayerId(spec.id), spec.sourceLayers);
+  if (!map?.getPaintProperty || !fillId || !lineId) return style;
+  const read = (layerId: string, name: string): unknown => {
+    try {
+      return map.getLayer(layerId) ? map.getPaintProperty?.(layerId, name) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const fillColor = read(fillId, "fill-color");
+  const fillOpacity = read(fillId, "fill-opacity");
+  const strokeColor = read(lineId, "line-color");
+  const strokeWidth = read(lineId, "line-width");
+  if (typeof fillColor === "string") style.fillColor = fillColor;
+  if (typeof fillOpacity === "number") style.fillOpacity = fillOpacity;
+  if (typeof strokeColor === "string") style.strokeColor = strokeColor;
+  if (typeof strokeWidth === "number") style.strokeWidth = strokeWidth;
+  return style;
+}
+
 function removeVectorLayer(collectionId: string): void {
+  vectorLoads.delete(collectionId); // cancels a load still in flight
   if (!state.vectors.delete(collectionId)) return;
   // Unregistering removes the store layer; the host then drops its native layers and source.
   state.app?.unregisterExternalNativeLayer?.(vectorLayerId(collectionId));
 }
 
+/** Drop boundaries a restored selection does not include. `connect` keeps them when the
+ * instance is unchanged, so without this a restored project would keep extra boundaries. */
+function restoreVectorSelection(features: string[]): void {
+  for (const id of [...state.vectors.keys()]) {
+    if (!features.includes(id)) removeVectorLayer(id);
+  }
+}
+
 function removeAllVectorLayers(): void {
+  vectorLoads.clear();
   for (const id of [...state.vectors.keys()]) removeVectorLayer(id);
 }
 
@@ -534,11 +607,17 @@ function startAtFirstPeriod(spec: RenderSpec): void {
   }
 }
 
+// Bumped by every dataset load and by clearing the dataset, so a load that finishes after
+// the user picked another dataset (or the placeholder) does not draw its layer.
+let datasetLoad = 0;
+
 async function loadDataset(datasetId: string, savedSelector?: Record<string, number>): Promise<void> {
   if (!state.ocsUrl) return;
+  const token = ++datasetLoad;
   setStatus(`Loading ${datasetId}…`);
   try {
     const collection = await fetchCollection(state.ocsUrl, datasetId);
+    if (token !== datasetLoad) return;
     const spec = buildRenderSpec(collection);
     if (savedSelector) applySavedSelector(spec, savedSelector);
     else if (state.app?.registerTemporalLayer) startAtFirstPeriod(spec);
@@ -546,7 +625,7 @@ async function loadDataset(datasetId: string, savedSelector?: Record<string, num
     state.datasetId = datasetId;
     state.spec = spec;
     state.style = { colormapName: spec.colormapName, clim: spec.clim, opacity: 1 };
-    await renderLayer(spec, bbox);
+    if (!(await renderLayer(spec, bbox, () => token === datasetLoad))) return;
     renderMeta(spec);
     renderDimControls(spec);
     renderLegend(spec);
@@ -554,12 +633,13 @@ async function loadDataset(datasetId: string, savedSelector?: Record<string, num
     panel?.datasetSection.classList.remove("ocs-hidden");
     setStatus("");
   } catch (err) {
-    setStatus(`Failed to load ${datasetId}: ${(err as Error).message}`, true);
+    if (token === datasetLoad) setStatus(`Failed to load ${datasetId}: ${(err as Error).message}`, true);
   }
 }
 
 /** Drop the raster layer and hide its panel section, e.g. when the placeholder is chosen. */
 function clearDataset(): void {
+  datasetLoad++; // cancels a load still in flight
   removeLayer();
   state.datasetId = null;
   state.spec = null;
@@ -904,6 +984,7 @@ export const plugin: GeoLibrePlugin = {
     if (ocsUrl) {
       await connect(ocsUrl);
       if (dataset) await loadDataset(dataset);
+      restoreVectorSelection(features);
       for (const id of features) await addVectorLayer(id);
       renderVectorOptions();
     }
@@ -926,6 +1007,7 @@ export const plugin: GeoLibrePlugin = {
       const features = Array.isArray(s.features) ? s.features.filter((f): f is string => typeof f === "string") : [];
       void connect(s.ocsUrl).then(async () => {
         if (s.datasetId) await loadDataset(s.datasetId, savedSelector);
+        restoreVectorSelection(features);
         for (const id of features) await addVectorLayer(id);
         renderVectorOptions();
       });

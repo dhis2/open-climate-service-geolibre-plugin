@@ -59,6 +59,8 @@ export interface GeoLibreTemporalLayerAdapter {
 export interface GeoLibreAppAPI {
   // Native Zarr rendering through GeoLibre's own @carbonplan/zarr-layer (GeoLibre #1447).
   addZarrLayer?: (name: string, url: string, options: GeoLibreZarrLayerOptions) => Promise<string>;
+  /** Layers in the project with their visibility and opacity. */
+  listLayers?: () => Array<{ id: string; name: string; type: string; visible: boolean; opacity: number }>;
   /** Current layer ids in the project, bottom to top. */
   getLayers?: () => string[];
   setZarrLayerSelector?: (layerId: string, selector: Record<string, number | string>) => Promise<boolean>;
@@ -136,6 +138,7 @@ export interface GeoLibreMapLike {
   addLayer: (layer: unknown, beforeId?: string) => void;
   removeLayer: (id: string) => void;
   getLayer: (id: string) => unknown;
+  getPaintProperty?: (layerId: string, name: string) => unknown;
   moveLayer?: (id: string, beforeId?: string) => void;
   getStyle?: () => { layers?: Array<{ id: string; type: string }> };
   getBounds?: () => { toArray: () => [[number, number], [number, number]] };
