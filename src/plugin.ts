@@ -105,6 +105,8 @@ function button(label: string, onClick: () => void): HTMLButtonElement {
 
 // Panel DOM references, rebuilt on each render(container).
 interface PanelRefs {
+  /** Holds the selected dataset's metadata, controls and legend; hidden when none is selected. */
+  datasetSection: HTMLElement;
   status: HTMLElement;
   collectionSelect: HTMLSelectElement;
   meta: HTMLElement;
@@ -511,16 +513,30 @@ async function loadDataset(datasetId: string, savedSelector?: Record<string, num
     renderDimControls(spec);
     renderLegend(spec);
     renderStyleControls(spec);
+    panel?.datasetSection.classList.remove("ocs-hidden");
     setStatus("");
   } catch (err) {
     setStatus(`Failed to load ${datasetId}: ${(err as Error).message}`, true);
   }
 }
 
+/** Drop the raster layer and hide its panel section, e.g. when the placeholder is chosen. */
+function clearDataset(): void {
+  removeLayer();
+  state.datasetId = null;
+  state.spec = null;
+  state.selector = {};
+  panel?.datasetSection.classList.add("ocs-hidden");
+  if (panel) panel.collectionSelect.value = "";
+}
+
 async function connect(ocsUrl: string): Promise<void> {
   const next = ocsUrl.trim();
   // Layers from another instance would no longer match the panel; drop them.
-  if (next !== state.ocsUrl) removeAllVectorLayers();
+  if (next !== state.ocsUrl) {
+    removeAllVectorLayers();
+    clearDataset();
+  }
   state.ocsUrl = next;
   if (!state.ocsUrl) {
     setStatus("Enter an Open Climate Service URL.", true);
@@ -574,7 +590,7 @@ function renderVectorOptions(): void {
   const vectors = state.collections.filter((c) => c.kind === "vector");
   host.classList.toggle("ocs-hidden", vectors.length === 0);
   if (vectors.length === 0) return;
-  host.appendChild(el("span", "ocs-field-label", "Boundaries"));
+  host.appendChild(el("span", "ocs-field-label", "Vector data"));
   for (const c of vectors) {
     const label = el("label", "ocs-check");
     const box = el("input");
@@ -772,23 +788,23 @@ function renderPanel(container: HTMLElement): () => void {
   collectionSelect.setAttribute("aria-label", "Climate dataset");
   collectionSelect.addEventListener("change", () => {
     if (collectionSelect.value) void loadDataset(collectionSelect.value);
+    else clearDataset();
   });
   root.appendChild(collectionSelect);
 
-  const vectors = el("div", "ocs-vectors ocs-hidden");
-  root.appendChild(vectors);
-
+  const datasetSection = el("div", "ocs-dataset ocs-hidden");
   const meta = el("div", "ocs-meta");
   const dims = el("div", "ocs-dims ocs-hidden");
   const legend = el("div", "ocs-legend");
   const styleControls = el("div", "ocs-style");
-  root.appendChild(meta);
-  root.appendChild(dims);
-  root.appendChild(legend);
-  root.appendChild(styleControls);
+  datasetSection.append(meta, dims, legend, styleControls);
+  root.appendChild(datasetSection);
+
+  const vectors = el("div", "ocs-vectors ocs-hidden");
+  root.appendChild(vectors);
 
   container.appendChild(root);
-  panel = { status, collectionSelect, meta, dims, legend, styleControls, vectors };
+  panel = { datasetSection, status, collectionSelect, meta, dims, legend, styleControls, vectors };
 
   // Restore state if the panel is reopened after being built once.
   if (state.collections.length) {
@@ -801,6 +817,7 @@ function renderPanel(container: HTMLElement): () => void {
     renderLegend(state.spec);
     renderStyleControls(state.spec);
   }
+  datasetSection.classList.toggle("ocs-hidden", state.spec == null);
 
   return () => {
     panel = null;

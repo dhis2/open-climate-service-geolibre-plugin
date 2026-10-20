@@ -30,7 +30,7 @@ GeoLibre go to **Settings → Manage Plugins → Install from file** and select 
    instance's region. To try the plugin without your own instance, click **Try Nepal demo**,
    which connects to the public demo at <https://ocs-demo-nepal.dhis2.org/>.
 3. Pick a dataset to draw it as a layer.
-4. Tick one or more **Boundaries** to draw them on the map.
+4. Tick one or more layers under **Vector data** to draw them on the map.
 5. Step through periods with the **time slider** at the bottom of the map, and adjust the
    **colormap** and **value range** in the panel.
 

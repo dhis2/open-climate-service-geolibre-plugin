@@ -76,6 +76,12 @@
   background: rgba(128, 128, 128, 0.15);
 }
 
+.ocs-dataset {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .ocs-vectors {
   display: flex;
   flex-direction: column;
