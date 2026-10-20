@@ -1,5 +1,4 @@
 import "./styles.css";
-import { ZarrLayer } from "@carbonplan/zarr-layer";
 import { buildColormap } from "./colormap";
 import {
   buildRenderSpec,
@@ -19,7 +18,6 @@ import type { GeoLibreAppAPI, GeoLibrePlugin, GeoLibreTimeGranularity, GeoLibreZ
 
 const PLUGIN_ID = "open-climate-service";
 const PANEL_ID = "ocs-panel";
-const LAYER_ID = "ocs-zarr-layer";
 const OCS_URL_PARAM = "ocsUrl";
 const DATASET_PARAM = "dataset";
 const FEATURES_PARAM = "features";
@@ -34,9 +32,7 @@ interface PluginState {
   datasetId: string | null;
   spec: RenderSpec | null;
   selector: Record<string, number>;
-  layer: ZarrLayer | null; // fallback path: our bundled zarr-layer instance
-  nativeLayerId: string | null; // native path: id returned by app.addZarrLayer
-  native: boolean; // true when rendering via GeoLibre's native addZarrLayer
+  nativeLayerId: string | null; // id returned by app.addZarrLayer
   temporalDetach: (() => void) | null; // unbinds the layer from the native Time Slider (#1448)
   style: { colormapName: string; clim: [number, number]; opacity: number };
   /** Feature collections drawn as vector layers, by collection id. Independent of the
@@ -61,9 +57,7 @@ const state: PluginState = {
   datasetId: null,
   spec: null,
   selector: {},
-  layer: null,
   nativeLayerId: null,
-  native: false,
   temporalDetach: null,
   style: { colormapName: "viridis", clim: [0, 100], opacity: 1 },
   vectors: new Map(),
@@ -173,7 +167,7 @@ function removeLayer(): void {
     state.temporalDetach = null;
   }
   const map = state.app?.getMap?.();
-  if (state.native && state.nativeLayerId) {
+  if (state.nativeLayerId) {
     if (map) {
       try {
         map.removeLayer(state.nativeLayerId);
@@ -182,24 +176,14 @@ function removeLayer(): void {
       }
     }
     state.app?.unregisterExternalNativeLayer?.(state.nativeLayerId);
-  } else if (state.layer && map) {
-    try {
-      map.removeLayer(LAYER_ID);
-    } catch {
-      /* already gone */
-    }
-    state.app?.unregisterExternalNativeLayer?.(LAYER_ID);
   }
-  state.layer = null;
   state.nativeLayerId = null;
 }
 
 function applySelector(): void {
-  if (state.native && state.nativeLayerId) {
+  if (state.nativeLayerId) {
     // In-place re-select on the host's layer (no rebuild) — GeoLibre #1447.
     void state.app?.setZarrLayerSelector?.(state.nativeLayerId, { ...state.selector });
-  } else {
-    state.layer?.setSelector({ ...state.selector });
   }
 }
 
@@ -281,18 +265,11 @@ function bindToTimeSlider(spec: RenderSpec, layerId: string): void {
 
 let _styleDebounce: number | undefined;
 
-/** Apply live colormap/clim/opacity. Fallback layer has in-place setters; the native
- * layer has no style setter yet, so we rebuild it (debounced) with fresh options. */
+/** Apply live colormap/clim. The native layer has no style setter yet, so rebuild it
+ * (debounced) with fresh options. */
 function applyStyle(): void {
-  if (state.native) {
-    window.clearTimeout(_styleDebounce);
-    _styleDebounce = window.setTimeout(() => void rebuildNative(), 200);
-  } else {
-    // Opacity is owned by GeoLibre's Style panel (via paintBridge), so we don't touch it
-    // here — re-applying it on a colormap/clim change would fight the user's setting.
-    state.layer?.setColormap(buildColormap(state.style.colormapName));
-    state.layer?.setClim(state.style.clim);
-  }
+  window.clearTimeout(_styleDebounce);
+  _styleDebounce = window.setTimeout(() => void rebuildNative(), 200);
 }
 
 async function rebuildNative(): Promise<void> {
@@ -331,62 +308,25 @@ async function renderLayer(
     setStatus("GeoLibre map is not available.", true);
     return false;
   }
+  if (!app.addZarrLayer) {
+    setStatus("Climate datasets need GeoLibre 2.4 or later.", true);
+    return false;
+  }
   removeLayer();
 
   state.selector = {};
   for (const d of spec.dims) state.selector[d.key] = d.index;
 
-  if (app.addZarrLayer) {
-    // Native path (GeoLibre >= #1447): render through the host's own zarr-layer — no
-    // bundled second copy, native Layers/Style-panel integration, CRS from proj4.
-    state.native = true;
-    state.nativeLayerId = await app.addZarrLayer(nativeName(spec), spec.zarrHref, buildZarrOptions(spec));
-    if (!isCurrent()) {
-      removeLayer();
-      return false;
-    }
-    bindToTimeSlider(spec, state.nativeLayerId);
-  } else {
-    // Fallback path (older GeoLibre): our bundled zarr-layer as a custom MapLibre layer,
-    // registered so it appears in the Layers panel; paintMode/paintBridge (also #1447)
-    // let GeoLibre's Style panel drop inert controls and bridge opacity to our layer.
-    state.native = false;
-    const zarrVersion = spec.zarrVersion === 2 || spec.zarrVersion === 3 ? spec.zarrVersion : undefined;
-    const layer = new ZarrLayer({
-      id: LAYER_ID,
-      source: spec.zarrHref,
-      variable: spec.variable,
-      clim: state.style.clim,
-      colormap: buildColormap(state.style.colormapName),
-      opacity: state.style.opacity,
-      selector: { ...state.selector },
-      crs: spec.crs,
-      ...(zarrVersion != null ? { zarrVersion } : {}),
-      ...(spec.fillValue != null ? { fillValue: spec.fillValue } : {}),
-      ...(spec.proj4 != null ? { proj4: spec.proj4 } : {}),
-      ...(spec.bounds ? { bounds: spec.bounds } : {}),
-    });
-    map.addLayer(layer);
-    app.registerExternalNativeLayer?.({
-      id: LAYER_ID,
-      name: nativeName(spec),
-      type: "raster",
-      nativeLayerIds: [LAYER_ID],
-      opacity: state.style.opacity,
-      paintMode: "plugin",
-      paintBridge: { setOpacity: (o) => layer.setOpacity(o) },
-      metadata: {
-        datasetId: spec.datasetId,
-        source: spec.source,
-        ocsUrl: state.ocsUrl,
-        pluginId: PLUGIN_ID,
-        externalNativeLayer: true,
-        controlOwnsPaint: true,
-      },
-    });
-    state.layer = layer;
+  // Render through the host's own zarr-layer (GeoLibre 2.4+, #1447): native Layers and
+  // Style-panel integration, CRS from proj4, and no second copy of the renderer and its
+  // WebAssembly codecs in this bundle.
+  state.nativeLayerId = await app.addZarrLayer(nativeName(spec), spec.zarrHref, buildZarrOptions(spec));
+  if (!isCurrent()) {
+    removeLayer();
+    return false;
   }
-  keepVectorsOnTop(state.native ? state.nativeLayerId : LAYER_ID);
+  bindToTimeSlider(spec, state.nativeLayerId);
+  keepVectorsOnTop(state.nativeLayerId);
 
   // Keep the current view while the instance extent is reasonably framed (the user is
   // looking at the country); re-frame the dataset if we've navigated off it or zoomed so
@@ -487,8 +427,7 @@ function registerVectorLayer(
 }
 
 /** Keep boundaries above the raster. The native raster is inserted beneath them through
- * `beforeLayerId`; only when the host ignored that (GeoLibre before #3140, or the bundled
- * fallback layer) do we re-register the boundaries on top, which briefly redraws them. */
+ * `beforeLayerId`; only when the host ignored that (GeoLibre before #3140) do we re-register the boundaries on top, which briefly redraws them. */
 function keepVectorsOnTop(rasterLayerId: string | null): void {
   if (state.vectors.size === 0 || !rasterLayerId) return;
   if (rasterAboveVectors(rasterLayerId)) restackVectorLayers();
@@ -818,8 +757,8 @@ function renderLegend(spec: RenderSpec): void {
 
 // Colormap + rescale styling — owned here because GeoLibre's right-panel raster controls
 // don't reach zarr-layer's colormap/clim. Opacity is intentionally NOT offered here: it's
-// driven by GeoLibre's Style panel (the native addZarrLayer layer, or the fallback's
-// paintBridge.setOpacity), so exposing our own slider would duplicate that control.
+// driven by GeoLibre's Style panel on the native addZarrLayer layer, so exposing our own
+// slider would duplicate that control.
 function renderStyleControls(spec: RenderSpec): void {
   if (!panel) return;
   const host = panel.styleControls;
