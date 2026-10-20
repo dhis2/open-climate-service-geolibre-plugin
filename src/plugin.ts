@@ -525,6 +525,15 @@ function applySavedSelector(spec: RenderSpec, saved: Record<string, number>): vo
   }
 }
 
+/** GeoLibre's Time Slider opens on the first period (so play runs forward from the start).
+ * Draw that period from the outset; starting at the latest would render it once and then
+ * jump to the first as soon as the slider binds, which shows as a flash. */
+function startAtFirstPeriod(spec: RenderSpec): void {
+  for (const dim of spec.dims) {
+    if (dim.isTemporal) dim.index = 0;
+  }
+}
+
 async function loadDataset(datasetId: string, savedSelector?: Record<string, number>): Promise<void> {
   if (!state.ocsUrl) return;
   setStatus(`Loading ${datasetId}…`);
@@ -532,6 +541,7 @@ async function loadDataset(datasetId: string, savedSelector?: Record<string, num
     const collection = await fetchCollection(state.ocsUrl, datasetId);
     const spec = buildRenderSpec(collection);
     if (savedSelector) applySavedSelector(spec, savedSelector);
+    else if (state.app?.registerTemporalLayer) startAtFirstPeriod(spec);
     const bbox = collection.extent?.spatial?.bbox?.[0] ?? null;
     state.datasetId = datasetId;
     state.spec = spec;
