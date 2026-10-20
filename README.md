@@ -11,8 +11,9 @@ Learn more about Open Climate Service: **<https://dhis2.github.io/open-climate-s
 - Point at any OCS instance and browse its published datasets.
 - Render a climate dataset (GeoZarr) as a map layer, listed in GeoLibre's Layers panel.
 - Overlay the instance's boundary layers (OCS feature collections, such as country,
-  provinces and districts), drawn by GeoLibre from their PMTiles archives in OCS's own style.
-  Each boundary layer is a separate entry in the Layers panel, styled from the Style panel.
+  provinces and districts) as outlines on top of the climate data, drawn by GeoLibre from
+  their PMTiles archives in the line colour OCS publishes. Each boundary layer is a separate
+  entry in the Layers panel; the Style panel can add a fill.
 - CRS, the time slider, variable, colormap, and value range are all taken from the dataset — projected national grids land in the right place automatically.
 - Deep-linkable via `?ocsUrl=…&dataset=…&features=…`, and your selection is saved with the GeoLibre project.
 

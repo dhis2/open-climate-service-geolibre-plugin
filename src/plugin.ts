@@ -291,6 +291,7 @@ async function rebuildNative(): Promise<void> {
   }
   state.nativeLayerId = await app.addZarrLayer(nativeName(spec), spec.zarrHref, buildZarrOptions(spec));
   bindToTimeSlider(spec, state.nativeLayerId);
+  restackVectorLayers();
 }
 
 async function renderLayer(spec: RenderSpec, bbox: [number, number, number, number] | null): Promise<void> {
@@ -351,6 +352,7 @@ async function renderLayer(spec: RenderSpec, bbox: [number, number, number, numb
     });
     state.layer = layer;
   }
+  restackVectorLayers();
 
   // Keep the current view while the instance extent is reasonably framed (the user is
   // looking at the country); re-frame the dataset if we've navigated off it or zoomed so
@@ -387,8 +389,25 @@ async function addVectorLayer(collectionId: string): Promise<boolean> {
   try {
     const collection = await fetchCollection(state.ocsUrl, collectionId);
     const spec = buildVectorSpec(collection, await fetchVectorStyle(collection));
-    const id = vectorLayerId(collectionId);
-    app.registerExternalNativeLayer({
+    registerVectorLayer(spec);
+    state.vectors.set(collectionId, spec);
+    if (!state.spec && spec.bbox && app.fitBounds && shouldFitToDataset()) app.fitBounds(spec.bbox);
+    setStatus("");
+    return true;
+  } catch (err) {
+    setStatus(`Failed to load ${collectionId}: ${(err as Error).message}`, true);
+    return false;
+  }
+}
+
+/** Register a boundary layer with GeoLibre, which draws it from the PMTiles archive.
+ * Boundaries are outlines: the fill layer stays (transparent) so a click inside a
+ * polygon still identifies it, and the Style panel can raise its opacity. */
+function registerVectorLayer(spec: VectorSpec): void {
+  const app = state.app;
+  if (!app?.registerExternalNativeLayer) return;
+  const id = vectorLayerId(spec.id);
+  app.registerExternalNativeLayer({
       id,
       name: `OCS: ${spec.title}`,
       type: "pmtiles",
@@ -396,7 +415,7 @@ async function addVectorLayer(collectionId: string): Promise<boolean> {
       source: { url: spec.pmtilesHref, sourceLayers: spec.sourceLayers, tileType: "vector", type: "vector" },
       sourcePath: spec.pmtilesHref,
       nativeLayerIds: pmtilesNativeLayerIds(id, spec.sourceLayers),
-      style: { ...spec.style },
+      style: { ...spec.style, fillOpacity: 0 },
       metadata: {
         sourceKind: "pmtiles-url",
         sourceLayers: spec.sourceLayers,
@@ -408,13 +427,15 @@ async function addVectorLayer(collectionId: string): Promise<boolean> {
         ...(spec.attribution ? { attribution: spec.attribution } : {}),
       },
     });
-    state.vectors.set(collectionId, spec);
-    if (!state.spec && spec.bbox && app.fitBounds && shouldFitToDataset()) app.fitBounds(spec.bbox);
-    setStatus("");
-    return true;
-  } catch (err) {
-    setStatus(`Failed to load ${collectionId}: ${(err as Error).message}`, true);
-    return false;
+}
+
+/** Put the boundaries back above the raster. GeoLibre's plugin API has no reorder call,
+ * but it appends a newly registered layer on top, so re-registering after the raster
+ * is added keeps boundaries visible over climate data. */
+function restackVectorLayers(): void {
+  for (const spec of state.vectors.values()) {
+    state.app?.unregisterExternalNativeLayer?.(vectorLayerId(spec.id));
+    registerVectorLayer(spec);
   }
 }
 
