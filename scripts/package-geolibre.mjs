@@ -41,7 +41,9 @@ archive.on("error", (error) => {
 
 archive.pipe(output);
 archive.file(manifestPath, { name: "plugin.json" });
-archive.directory(path.join(pluginDir, "dist"), "dist");
+// Ship the bundle and its CSS, not the source map: it is larger than the bundle itself and
+// GeoLibre never loads it.
+archive.glob("**/*", { cwd: path.join(pluginDir, "dist"), ignore: ["**/*.map"] }, { prefix: "dist" });
 await archive.finalize();
 
 await new Promise((resolve, reject) => {

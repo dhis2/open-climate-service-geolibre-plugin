@@ -19,6 +19,9 @@ Learn more about Open Climate Service: **<https://dhis2.github.io/open-climate-s
 
 ## Install
 
+Requires GeoLibre 2.4 or later: the plugin draws climate datasets with GeoLibre's own Zarr
+renderer and binds their time axis to GeoLibre's Time Slider.
+
 Download the latest `open-climate-service-<version>.zip` from the
 [**Releases**](https://github.com/dhis2/open-climate-service-geolibre-plugin/releases) page, then in
 GeoLibre go to **Settings → Manage Plugins → Install from file** and select the zip.
