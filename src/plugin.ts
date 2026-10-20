@@ -3,13 +3,16 @@ import { ZarrLayer } from "@carbonplan/zarr-layer";
 import { buildColormap } from "./colormap";
 import {
   buildRenderSpec,
+  buildVectorSpec,
   fetchCatalog,
   fetchCollection,
   fetchInstanceExtent,
+  fetchVectorStyle,
   type DimState,
   type InstanceExtent,
   type OcsCollectionSummary,
   type RenderSpec,
+  type VectorSpec,
 } from "./ocs";
 import type { GeoLibreAppAPI, GeoLibrePlugin, GeoLibreTimeGranularity, GeoLibreZarrLayerOptions } from "./types/geolibre";
 
@@ -18,6 +21,9 @@ const PANEL_ID = "ocs-panel";
 const LAYER_ID = "ocs-zarr-layer";
 const OCS_URL_PARAM = "ocsUrl";
 const DATASET_PARAM = "dataset";
+const FEATURES_PARAM = "features";
+// The public Open Climate Service demo (Nepal), offered as a one-click way to try the plugin.
+const DEMO_URL = "https://ocs-demo-nepal.dhis2.org";
 
 interface PluginState {
   app?: GeoLibreAppAPI;
@@ -32,6 +38,9 @@ interface PluginState {
   native: boolean; // true when rendering via GeoLibre's native addZarrLayer
   temporalDetach: (() => void) | null; // unbinds the layer from the native Time Slider (#1448)
   style: { colormapName: string; clim: [number, number]; opacity: number };
+  /** Feature collections drawn as vector layers, by collection id. Independent of the
+   * single raster dataset, so boundaries can sit on top of any climate layer. */
+  vectors: Map<string, VectorSpec>;
 }
 
 /** The serializable subset of state persisted via getProjectState / restored via
@@ -41,6 +50,7 @@ interface OcsProjectState {
   ocsUrl?: string;
   datasetId?: string | null;
   selector?: Record<string, number>;
+  features?: string[];
 }
 
 const state: PluginState = {
@@ -55,6 +65,7 @@ const state: PluginState = {
   native: false,
   temporalDetach: null,
   style: { colormapName: "viridis", clim: [0, 100], opacity: 1 },
+  vectors: new Map(),
 };
 
 // Curated colormaps offered in the panel (chroma/ColorBrewer names); the dataset's
@@ -100,6 +111,7 @@ interface PanelRefs {
   dims: HTMLElement;
   legend: HTMLElement;
   styleControls: HTMLElement;
+  vectors: HTMLElement;
 }
 let panel: PanelRefs | null = null;
 
@@ -347,6 +359,75 @@ async function renderLayer(spec: RenderSpec, bbox: [number, number, number, numb
   if (bbox && app.fitBounds && shouldFitToDataset()) app.fitBounds(bbox);
 }
 
+// --- vector layers (feature collections) ------------------------------------
+
+function vectorLayerId(collectionId: string): string {
+  return `ocs-features-${collectionId}`;
+}
+
+/** GeoLibre's native PMTiles layer ids: one fill, line and circle layer per source layer,
+ * named the way the host's layer sync expects (`pmtilesNativeLayerIds` in GeoLibre). */
+function pmtilesNativeLayerIds(sourceId: string, sourceLayers: string[]): string[] {
+  return sourceLayers.flatMap((sl) =>
+    ["fill", "line", "circle"].map((kind) => `${sourceId}-${encodeURIComponent(sl).replaceAll("%", "_")}-${kind}`),
+  );
+}
+
+/** Draw a feature collection from its PMTiles archive. GeoLibre renders it natively: the
+ * layer gets the host's Layers-panel entry, Style panel and project persistence. */
+async function addVectorLayer(collectionId: string): Promise<boolean> {
+  const app = state.app;
+  if (!app?.registerExternalNativeLayer) {
+    setStatus("This GeoLibre version cannot add vector layers from a plugin.", true);
+    return false;
+  }
+  // No early return for a layer we think is drawn: the user may have removed it in the
+  // Layers panel, and registering the same id again only updates it.
+  setStatus(`Loading ${collectionId}…`);
+  try {
+    const collection = await fetchCollection(state.ocsUrl, collectionId);
+    const spec = buildVectorSpec(collection, await fetchVectorStyle(collection));
+    const id = vectorLayerId(collectionId);
+    app.registerExternalNativeLayer({
+      id,
+      name: `OCS: ${spec.title}`,
+      type: "pmtiles",
+      sourceId: id,
+      source: { url: spec.pmtilesHref, sourceLayers: spec.sourceLayers, tileType: "vector", type: "vector" },
+      sourcePath: spec.pmtilesHref,
+      nativeLayerIds: pmtilesNativeLayerIds(id, spec.sourceLayers),
+      style: { ...spec.style },
+      metadata: {
+        sourceKind: "pmtiles-url",
+        sourceLayers: spec.sourceLayers,
+        tileType: "vector",
+        pickable: true,
+        datasetId: spec.id,
+        ocsUrl: state.ocsUrl,
+        pluginId: PLUGIN_ID,
+        ...(spec.attribution ? { attribution: spec.attribution } : {}),
+      },
+    });
+    state.vectors.set(collectionId, spec);
+    if (!state.spec && spec.bbox && app.fitBounds && shouldFitToDataset()) app.fitBounds(spec.bbox);
+    setStatus("");
+    return true;
+  } catch (err) {
+    setStatus(`Failed to load ${collectionId}: ${(err as Error).message}`, true);
+    return false;
+  }
+}
+
+function removeVectorLayer(collectionId: string): void {
+  if (!state.vectors.delete(collectionId)) return;
+  // Unregistering removes the store layer; the host then drops its native layers and source.
+  state.app?.unregisterExternalNativeLayer?.(vectorLayerId(collectionId));
+}
+
+function removeAllVectorLayers(): void {
+  for (const id of [...state.vectors.keys()]) removeVectorLayer(id);
+}
+
 function currentViewBbox(): [number, number, number, number] | null {
   const bounds = state.app?.getMap?.()?.getBounds?.();
   if (!bounds) return null;
@@ -416,7 +497,10 @@ async function loadDataset(datasetId: string, savedSelector?: Record<string, num
 }
 
 async function connect(ocsUrl: string): Promise<void> {
-  state.ocsUrl = ocsUrl.trim();
+  const next = ocsUrl.trim();
+  // Layers from another instance would no longer match the panel; drop them.
+  if (next !== state.ocsUrl) removeAllVectorLayers();
+  state.ocsUrl = next;
   if (!state.ocsUrl) {
     setStatus("Enter an Open Climate Service URL.", true);
     return;
@@ -430,10 +514,14 @@ async function connect(ocsUrl: string): Promise<void> {
     state.collections = collections;
     state.instanceExtent = extent;
     renderCollectionOptions();
+    renderVectorOptions();
     // Frame the instance extent up front, before any dataset is selected.
     if (extent && state.app?.fitBounds) state.app.fitBounds(extent.bbox);
     const where = extent?.name ? `${extent.name} — ` : "";
-    setStatus(collections.length ? `${where}${collections.length} datasets` : `${where}no published datasets`);
+    const rasters = collections.filter((c) => c.kind === "raster").length;
+    const vectors = collections.length - rasters;
+    const parts = [`${rasters} datasets`, ...(vectors ? [`${vectors} boundary layers`] : [])];
+    setStatus(collections.length ? `${where}${parts.join(", ")}` : `${where}no published datasets`);
   } catch (err) {
     setStatus(`Could not reach ${state.ocsUrl}/stac: ${(err as Error).message}`, true);
   }
@@ -448,13 +536,42 @@ function renderCollectionOptions(): void {
   const placeholder = el("option", undefined, "Select a dataset…");
   placeholder.value = "";
   sel.appendChild(placeholder);
-  for (const c of state.collections) {
+  for (const c of state.collections.filter((x) => x.kind === "raster")) {
     const opt = el("option", undefined, c.title);
     opt.value = c.id;
     sel.appendChild(opt);
   }
   sel.value = state.datasetId ?? "";
-  sel.disabled = state.collections.length === 0;
+  sel.disabled = !state.collections.some((c) => c.kind === "raster");
+}
+
+/** One checkbox per feature collection; each toggles its own vector layer. */
+function renderVectorOptions(): void {
+  if (!panel) return;
+  const host = panel.vectors;
+  host.replaceChildren();
+  const vectors = state.collections.filter((c) => c.kind === "vector");
+  host.classList.toggle("ocs-hidden", vectors.length === 0);
+  if (vectors.length === 0) return;
+  host.appendChild(el("span", "ocs-field-label", "Boundaries"));
+  for (const c of vectors) {
+    const label = el("label", "ocs-check");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = state.vectors.has(c.id);
+    box.addEventListener("change", () => {
+      if (box.checked) {
+        void addVectorLayer(c.id).then((ok) => {
+          if (!ok) box.checked = false;
+        });
+      } else {
+        removeVectorLayer(c.id);
+      }
+    });
+    label.appendChild(box);
+    label.appendChild(el("span", undefined, c.title));
+    host.appendChild(label);
+  }
 }
 
 function renderMeta(spec: RenderSpec): void {
@@ -615,6 +732,13 @@ function renderPanel(container: HTMLElement): () => void {
   urlRow.appendChild(el("label", "ocs-field-label", "Open Climate Service URL"));
   urlRow.appendChild(urlInput);
   urlRow.appendChild(button("Connect", () => void connect(urlInput.value)));
+  const demo = el("button", "ocs-link", "Try the Nepal demo instance");
+  demo.type = "button";
+  demo.addEventListener("click", () => {
+    urlInput.value = DEMO_URL;
+    void connect(DEMO_URL);
+  });
+  urlRow.appendChild(demo);
   root.appendChild(urlRow);
 
   const status = el("div", "ocs-status");
@@ -622,10 +746,14 @@ function renderPanel(container: HTMLElement): () => void {
 
   const collectionSelect = el("select", "ocs-select");
   collectionSelect.disabled = true;
+  collectionSelect.setAttribute("aria-label", "Climate dataset");
   collectionSelect.addEventListener("change", () => {
     if (collectionSelect.value) void loadDataset(collectionSelect.value);
   });
   root.appendChild(collectionSelect);
+
+  const vectors = el("div", "ocs-vectors ocs-hidden");
+  root.appendChild(vectors);
 
   const meta = el("div", "ocs-meta");
   const dims = el("div", "ocs-dims ocs-hidden");
@@ -637,10 +765,13 @@ function renderPanel(container: HTMLElement): () => void {
   root.appendChild(styleControls);
 
   container.appendChild(root);
-  panel = { status, collectionSelect, meta, dims, legend, styleControls };
+  panel = { status, collectionSelect, meta, dims, legend, styleControls, vectors };
 
   // Restore state if the panel is reopened after being built once.
-  if (state.collections.length) renderCollectionOptions();
+  if (state.collections.length) {
+    renderCollectionOptions();
+    renderVectorOptions();
+  }
   if (state.spec) {
     renderMeta(state.spec);
     renderDimControls(state.spec);
@@ -663,7 +794,7 @@ export const plugin: GeoLibrePlugin = {
   // Injected from package.json at build time (see vite.geolibre.config.ts) so the
   // manifest, bundle, and package.json versions stay in lockstep.
   version: __OCS_PLUGIN_VERSION__,
-  urlParameterNames: [OCS_URL_PARAM, DATASET_PARAM],
+  urlParameterNames: [OCS_URL_PARAM, DATASET_PARAM, FEATURES_PARAM],
 
   activate(app) {
     state.app = app;
@@ -679,6 +810,7 @@ export const plugin: GeoLibrePlugin = {
 
   deactivate(app) {
     removeLayer();
+    removeAllVectorLayers();
     unregisterPanel?.();
     unregisterPanel = undefined;
     app.unregisterRightPanel?.(PANEL_ID);
@@ -690,14 +822,22 @@ export const plugin: GeoLibrePlugin = {
     state.app = app;
     const ocsUrl = params.get(OCS_URL_PARAM);
     const dataset = params.get(DATASET_PARAM);
+    const features = (params.get(FEATURES_PARAM) ?? "").split(",").map((f) => f.trim()).filter(Boolean);
     if (ocsUrl) {
       await connect(ocsUrl);
       if (dataset) await loadDataset(dataset);
+      for (const id of features) await addVectorLayer(id);
+      renderVectorOptions();
     }
   },
 
   getProjectState() {
-    return { ocsUrl: state.ocsUrl, datasetId: state.datasetId, selector: state.selector };
+    return {
+      ocsUrl: state.ocsUrl,
+      datasetId: state.datasetId,
+      selector: state.selector,
+      features: [...state.vectors.keys()],
+    };
   },
 
   applyProjectState(app, raw) {
@@ -705,8 +845,11 @@ export const plugin: GeoLibrePlugin = {
     const s = (raw ?? {}) as OcsProjectState;
     if (typeof s.ocsUrl === "string" && s.ocsUrl) {
       const savedSelector = s.selector && typeof s.selector === "object" ? s.selector : undefined;
-      void connect(s.ocsUrl).then(() => {
-        if (s.datasetId) return loadDataset(s.datasetId, savedSelector);
+      const features = Array.isArray(s.features) ? s.features.filter((f): f is string => typeof f === "string") : [];
+      void connect(s.ocsUrl).then(async () => {
+        if (s.datasetId) await loadDataset(s.datasetId, savedSelector);
+        for (const id of features) await addVectorLayer(id);
+        renderVectorOptions();
       });
     }
   },

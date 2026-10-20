@@ -60,6 +60,37 @@
   background: #1d4ed8;
 }
 
+/* A text-style button for secondary actions (e.g. connecting to the demo instance). */
+.ocs-link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+.ocs-link:hover {
+  opacity: 1;
+}
+
+.ocs-vectors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ocs-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
 .ocs-status {
   min-height: 16px;
   font-size: 12px;

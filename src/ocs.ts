@@ -1,14 +1,39 @@
 // Open Climate Service STAC client: list a catalog's collections and turn a
-// collection document into everything zarr-layer needs to render it. Mirrors the
-// logic in the OCS `/map` viewer so behaviour stays consistent across clients.
+// collection document into everything zarr-layer (rasters) or GeoLibre's PMTiles
+// rendering (feature collections) needs to draw it. Mirrors the logic in the OCS
+// `/map` viewer so behaviour stays consistent across clients.
 
 // STAC/JSON documents are dynamic; type them loosely at the boundary.
 type StacJson = Record<string, any>;
+
+export type CollectionKind = "raster" | "vector";
 
 export interface OcsCollectionSummary {
   id: string;
   title: string;
   href: string;
+  /** Raster (GeoZarr) dataset or vector feature collection (GeoParquet + PMTiles). */
+  kind: CollectionKind;
+}
+
+/** Flat vector paint, in the shape of GeoLibre's per-layer style. */
+export interface VectorStyle {
+  fillColor: string;
+  fillOpacity: number;
+  strokeColor: string;
+  strokeWidth: number;
+}
+
+/** Everything needed to draw an OCS feature collection from its PMTiles archive. */
+export interface VectorSpec {
+  id: string;
+  title: string;
+  pmtilesHref: string;
+  sourceLayers: string[];
+  style: VectorStyle;
+  bbox: [number, number, number, number] | null;
+  featureCount: number | null;
+  attribution: string | null;
 }
 
 export type DimControl = "slider" | "dropdown";
@@ -184,20 +209,119 @@ export async function fetchInstanceExtent(ocsUrl: string): Promise<InstanceExten
   }
 }
 
-/** Fetch a catalog's published collections (id + title) from `<ocsUrl>/stac`. */
+/** Ids of the instance's feature collections, from `<ocsUrl>/features`. Empty when the
+ * instance predates feature collections or the request fails. */
+export async function fetchFeatureCollectionIds(ocsUrl: string): Promise<Set<string>> {
+  try {
+    const res = await fetch(`${stripTrailingSlashes(ocsUrl)}/features`);
+    if (!res.ok) return new Set();
+    const data = (await res.json()) as StacJson;
+    const items: StacJson[] = Array.isArray(data.items) ? data.items : [];
+    return new Set(items.map((i) => i.id).filter((id): id is string => typeof id === "string" && id.length > 0));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Fetch a catalog's published collections from `<ocsUrl>/stac`. The STAC catalog lists
+ * rasters and feature collections alike as `child` links; `/features` says which are
+ * vector, so the panel can offer them separately without fetching every collection. */
 export async function fetchCatalog(ocsUrl: string): Promise<OcsCollectionSummary[]> {
   const base = stripTrailingSlashes(ocsUrl);
-  const res = await fetch(`${base}/stac`);
+  const [res, featureIds] = await Promise.all([fetch(`${base}/stac`), fetchFeatureCollectionIds(base)]);
   if (!res.ok) throw new Error(`STAC catalog fetch failed (HTTP ${res.status})`);
   const cat = (await res.json()) as StacJson;
   const links: StacJson[] = Array.isArray(cat.links) ? cat.links : [];
   return links
     .filter((l) => l.rel === "child")
-    .map((l) => {
+    .map((l): OcsCollectionSummary => {
       const id = stripTrailingSlashes(String(l.href)).split("/").pop() ?? "";
-      return { id, title: typeof l.title === "string" && l.title ? l.title : id, href: String(l.href) };
+      return {
+        id,
+        title: typeof l.title === "string" && l.title ? l.title : id,
+        href: String(l.href),
+        kind: featureIds.has(id) ? "vector" : "raster",
+      };
     })
     .filter((c) => c.id.length > 0);
+}
+
+/** A feature collection has no Zarr asset and declares the STAC table extension or a
+ * PMTiles/style asset; a raster has a `zarr` asset. */
+export function isVectorCollection(collection: StacJson): boolean {
+  const assets: StacJson = collection.assets ?? {};
+  if (assets.zarr) return false;
+  return Boolean(assets.tiles || assets.style || collection["table:row_count"] != null);
+}
+
+const DEFAULT_VECTOR_STYLE: VectorStyle = {
+  fillColor: "#0066cc",
+  fillOpacity: 0.15,
+  strokeColor: "#1e3a5f",
+  strokeWidth: 1,
+};
+
+/** Read flat fill/line paint from an OCS MapLibre style document. Only literal values are
+ * taken; data-driven expressions fall back to the default, since GeoLibre's per-layer
+ * style is flat. */
+export function vectorStyleFromMapLibre(style: StacJson | null): VectorStyle {
+  const out: VectorStyle = { ...DEFAULT_VECTOR_STYLE };
+  const layers: StacJson[] = Array.isArray(style?.layers) ? style.layers : [];
+  const fill: StacJson = layers.find((l) => l.type === "fill")?.paint ?? {};
+  const line: StacJson = layers.find((l) => l.type === "line")?.paint ?? {};
+  if (typeof fill["fill-color"] === "string") out.fillColor = fill["fill-color"];
+  if (typeof fill["fill-opacity"] === "number") out.fillOpacity = fill["fill-opacity"];
+  if (typeof line["line-color"] === "string") out.strokeColor = line["line-color"];
+  if (typeof line["line-width"] === "number") out.strokeWidth = line["line-width"];
+  return out;
+}
+
+/** Fetch a feature collection's default MapLibre style; null if it has none or it fails. */
+export async function fetchVectorStyle(collection: StacJson): Promise<StacJson | null> {
+  const href = collection.assets?.style?.href;
+  if (typeof href !== "string" || !href) return null;
+  try {
+    const res = await fetch(href);
+    return res.ok ? ((await res.json()) as StacJson) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Turn a feature collection's STAC document (and its style, if fetched) into a spec for
+ * GeoLibre's native PMTiles rendering. */
+export function buildVectorSpec(collection: StacJson, style: StacJson | null = null): VectorSpec {
+  const links: StacJson[] = Array.isArray(collection.links) ? collection.links : [];
+  const pmtilesLink = links.find((l) => l.rel === "pmtiles" && typeof l.href === "string");
+  const pmtilesHref: unknown = collection.assets?.tiles?.href ?? pmtilesLink?.href;
+  if (typeof pmtilesHref !== "string" || !pmtilesHref) {
+    throw new Error("No PMTiles asset found in this feature collection");
+  }
+  // web-map-links names the archive's layers; OCS writes every collection to one
+  // source layer called "features".
+  const declared = pmtilesLink?.["pmtiles:layers"];
+  const sourceLayers: string[] =
+    Array.isArray(declared) && declared.length > 0 && declared.every((s) => typeof s === "string")
+      ? declared
+      : ["features"];
+  const rawBbox = collection.extent?.spatial?.bbox?.[0];
+  const bbox: [number, number, number, number] | null =
+    Array.isArray(rawBbox) && rawBbox.length === 4 && rawBbox.every((n) => typeof n === "number")
+      ? [rawBbox[0], rawBbox[1], rawBbox[2], rawBbox[3]]
+      : null;
+  const featureCount = typeof collection["table:row_count"] === "number" ? collection["table:row_count"] : null;
+  const sources: StacJson[] = Object.values((style?.sources ?? {}) as StacJson);
+  const attribution = sources.find((s) => typeof s?.attribution === "string")?.attribution ?? null;
+  return {
+    id: String(collection.id),
+    title: typeof collection.title === "string" && collection.title ? collection.title : String(collection.id),
+    pmtilesHref,
+    sourceLayers,
+    style: vectorStyleFromMapLibre(style),
+    bbox,
+    featureCount,
+    attribution,
+  };
 }
 
 /** Fetch a single collection document from `<ocsUrl>/stac/collections/<id>`. */

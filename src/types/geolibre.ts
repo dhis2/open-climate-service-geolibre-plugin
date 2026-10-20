@@ -93,12 +93,29 @@ export interface GeoLibreMapControl {
   onRemove: () => void;
 }
 
+/** The flat per-layer vector style GeoLibre applies to a registered layer's native
+ * fill/line/circle layers; the plugin's keys win over user edits on (re-)registration. */
+export interface GeoLibreLayerStyle {
+  fillColor?: string;
+  fillOpacity?: number;
+  strokeColor?: string;
+  strokeWidth?: number;
+  minZoom?: number;
+  maxZoom?: number;
+}
+
 export interface GeoLibreExternalNativeLayerRegistration {
   id: string;
   name: string;
   type?: string;
   nativeLayerIds: string[];
   sourceIds?: string[];
+  // Host-rendered sources: with `type: "pmtiles"` and `metadata.sourceKind: "pmtiles-url"`,
+  // GeoLibre adds the PMTiles vector source and its fill/line/circle layers itself.
+  sourceId?: string;
+  source?: Record<string, unknown>;
+  sourcePath?: string;
+  style?: GeoLibreLayerStyle;
   beforeId?: string;
   opacity?: number;
   metadata?: Record<string, unknown>;
