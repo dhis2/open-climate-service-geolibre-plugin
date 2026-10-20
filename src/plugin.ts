@@ -3,13 +3,17 @@ import { ZarrLayer } from "@carbonplan/zarr-layer";
 import { buildColormap } from "./colormap";
 import {
   buildRenderSpec,
+  buildVectorSpec,
   fetchCatalog,
   fetchCollection,
   fetchInstanceExtent,
+  fetchVectorStyle,
   type DimState,
   type InstanceExtent,
   type OcsCollectionSummary,
   type RenderSpec,
+  type VectorSpec,
+  type VectorStyle,
 } from "./ocs";
 import type { GeoLibreAppAPI, GeoLibrePlugin, GeoLibreTimeGranularity, GeoLibreZarrLayerOptions } from "./types/geolibre";
 
@@ -18,6 +22,9 @@ const PANEL_ID = "ocs-panel";
 const LAYER_ID = "ocs-zarr-layer";
 const OCS_URL_PARAM = "ocsUrl";
 const DATASET_PARAM = "dataset";
+const FEATURES_PARAM = "features";
+// The public Open Climate Service demo (Nepal), offered as a one-click way to try the plugin.
+const DEMO_URL = "https://ocs-demo-nepal.dhis2.org";
 
 interface PluginState {
   app?: GeoLibreAppAPI;
@@ -32,6 +39,9 @@ interface PluginState {
   native: boolean; // true when rendering via GeoLibre's native addZarrLayer
   temporalDetach: (() => void) | null; // unbinds the layer from the native Time Slider (#1448)
   style: { colormapName: string; clim: [number, number]; opacity: number };
+  /** Feature collections drawn as vector layers, by collection id. Independent of the
+   * single raster dataset, so boundaries can sit on top of any climate layer. */
+  vectors: Map<string, VectorSpec>;
 }
 
 /** The serializable subset of state persisted via getProjectState / restored via
@@ -41,6 +51,7 @@ interface OcsProjectState {
   ocsUrl?: string;
   datasetId?: string | null;
   selector?: Record<string, number>;
+  features?: string[];
 }
 
 const state: PluginState = {
@@ -55,6 +66,7 @@ const state: PluginState = {
   native: false,
   temporalDetach: null,
   style: { colormapName: "viridis", clim: [0, 100], opacity: 1 },
+  vectors: new Map(),
 };
 
 // Curated colormaps offered in the panel (chroma/ColorBrewer names); the dataset's
@@ -94,12 +106,15 @@ function button(label: string, onClick: () => void): HTMLButtonElement {
 
 // Panel DOM references, rebuilt on each render(container).
 interface PanelRefs {
+  /** Holds the selected dataset's metadata, controls and legend; hidden when none is selected. */
+  datasetSection: HTMLElement;
   status: HTMLElement;
   collectionSelect: HTMLSelectElement;
   meta: HTMLElement;
   dims: HTMLElement;
   legend: HTMLElement;
   styleControls: HTMLElement;
+  vectors: HTMLElement;
 }
 let panel: PanelRefs | null = null;
 
@@ -128,7 +143,28 @@ function buildZarrOptions(spec: RenderSpec): GeoLibreZarrLayerOptions {
     ...(spec.crs ? { crs: spec.crs } : {}),
     ...(spec.proj4 != null ? { proj4: spec.proj4 } : {}),
     ...(spec.bounds ? { bounds: spec.bounds } : {}),
+    ...(lowestVectorLayerId() ? { beforeLayerId: lowestVectorLayerId() } : {}),
   };
+}
+
+/** The bottom-most of our boundary layers, so a raster can be inserted beneath them all. */
+function lowestVectorLayerId(): string | undefined {
+  const ids = [...state.vectors.keys()].map(vectorLayerId);
+  if (ids.length === 0) return undefined;
+  const order = state.app?.getLayers?.();
+  if (!order) return ids[0];
+  return order.find((id) => ids.includes(id)) ?? ids[0];
+}
+
+/** Whether a raster layer sits above any of our boundary layers in the project order. */
+function rasterAboveVectors(rasterLayerId: string): boolean {
+  const order = state.app?.getLayers?.();
+  if (!order) return true; // can't tell: assume the host appended it on top
+  const rasterIndex = order.indexOf(rasterLayerId);
+  return [...state.vectors.keys()].some((id) => {
+    const vectorIndex = order.indexOf(vectorLayerId(id));
+    return vectorIndex >= 0 && rasterIndex > vectorIndex;
+  });
 }
 
 function removeLayer(): void {
@@ -279,14 +315,21 @@ async function rebuildNative(): Promise<void> {
   }
   state.nativeLayerId = await app.addZarrLayer(nativeName(spec), spec.zarrHref, buildZarrOptions(spec));
   bindToTimeSlider(spec, state.nativeLayerId);
+  keepVectorsOnTop(state.nativeLayerId);
 }
 
-async function renderLayer(spec: RenderSpec, bbox: [number, number, number, number] | null): Promise<void> {
+/** Draw the raster. `isCurrent` reports whether this load is still the one the user wants;
+ * a layer created after it went stale is removed. Returns false when nothing was drawn. */
+async function renderLayer(
+  spec: RenderSpec,
+  bbox: [number, number, number, number] | null,
+  isCurrent: () => boolean = () => true,
+): Promise<boolean> {
   const app = state.app;
   const map = app?.getMap?.();
   if (!app || !map) {
     setStatus("GeoLibre map is not available.", true);
-    return;
+    return false;
   }
   removeLayer();
 
@@ -298,6 +341,10 @@ async function renderLayer(spec: RenderSpec, bbox: [number, number, number, numb
     // bundled second copy, native Layers/Style-panel integration, CRS from proj4.
     state.native = true;
     state.nativeLayerId = await app.addZarrLayer(nativeName(spec), spec.zarrHref, buildZarrOptions(spec));
+    if (!isCurrent()) {
+      removeLayer();
+      return false;
+    }
     bindToTimeSlider(spec, state.nativeLayerId);
   } else {
     // Fallback path (older GeoLibre): our bundled zarr-layer as a custom MapLibre layer,
@@ -339,12 +386,170 @@ async function renderLayer(spec: RenderSpec, bbox: [number, number, number, numb
     });
     state.layer = layer;
   }
+  keepVectorsOnTop(state.native ? state.nativeLayerId : LAYER_ID);
 
   // Keep the current view while the instance extent is reasonably framed (the user is
   // looking at the country); re-frame the dataset if we've navigated off it or zoomed so
   // far out it's tiny. Right after connect the view is the instance extent, so selecting a
   // dataset won't jump the camera.
   if (bbox && app.fitBounds && shouldFitToDataset()) app.fitBounds(bbox);
+  return true;
+}
+
+// --- vector layers (feature collections) ------------------------------------
+
+function vectorLayerId(collectionId: string): string {
+  return `ocs-features-${collectionId}`;
+}
+
+/** GeoLibre's native PMTiles layer ids: one fill, line and circle layer per source layer,
+ * named the way the host's layer sync expects (`pmtilesNativeLayerIds` in GeoLibre). */
+function pmtilesNativeLayerIds(sourceId: string, sourceLayers: string[]): string[] {
+  return sourceLayers.flatMap((sl) =>
+    ["fill", "line", "circle"].map((kind) => `${sourceId}-${encodeURIComponent(sl).replaceAll("%", "_")}-${kind}`),
+  );
+}
+
+/** Draw a feature collection from its PMTiles archive. GeoLibre renders it natively: the
+ * layer gets the host's Layers-panel entry, Style panel and project persistence. */
+// The latest load per collection. Unticking a boundary, switching instance or deactivating
+// invalidates it, so a load that finishes afterwards does not add the layer back.
+const vectorLoads = new Map<string, number>();
+let vectorLoadSeq = 0;
+
+async function addVectorLayer(collectionId: string): Promise<boolean> {
+  const app = state.app;
+  if (!app?.registerExternalNativeLayer) {
+    setStatus("This GeoLibre version cannot add vector layers from a plugin.", true);
+    return false;
+  }
+  // No early return for a layer we think is drawn: the user may have removed it in the
+  // Layers panel, and registering the same id again only updates it.
+  const token = ++vectorLoadSeq;
+  vectorLoads.set(collectionId, token);
+  const ocsUrl = state.ocsUrl;
+  const current = () => vectorLoads.get(collectionId) === token && state.ocsUrl === ocsUrl;
+  setStatus(`Loading ${collectionId}…`);
+  try {
+    const collection = await fetchCollection(ocsUrl, collectionId);
+    const spec = buildVectorSpec(collection, await fetchVectorStyle(collection));
+    if (!current()) {
+      setStatus("");
+      return false;
+    }
+    vectorLoads.delete(collectionId);
+    registerVectorLayer(spec);
+    state.vectors.set(collectionId, spec);
+    if (!state.spec && spec.bbox && app.fitBounds && shouldFitToDataset()) app.fitBounds(spec.bbox);
+    setStatus("");
+    return true;
+  } catch (err) {
+    if (current()) {
+      vectorLoads.delete(collectionId);
+      setStatus(`Failed to load ${collectionId}: ${(err as Error).message}`, true);
+    }
+    return false;
+  }
+}
+
+/** Register a boundary layer with GeoLibre, which draws it from the PMTiles archive.
+ * Boundaries are outlines: the fill layer stays (transparent) so a click inside a
+ * polygon still identifies it, and the Style panel can raise its opacity. */
+function registerVectorLayer(
+  spec: VectorSpec,
+  style: VectorStyle = { ...spec.style, fillOpacity: 0 },
+  opacity?: number,
+): void {
+  const app = state.app;
+  if (!app?.registerExternalNativeLayer) return;
+  const id = vectorLayerId(spec.id);
+  app.registerExternalNativeLayer({
+      id,
+      name: `OCS: ${spec.title}`,
+      type: "pmtiles",
+      sourceId: id,
+      source: { url: spec.pmtilesHref, sourceLayers: spec.sourceLayers, tileType: "vector", type: "vector" },
+      sourcePath: spec.pmtilesHref,
+      nativeLayerIds: pmtilesNativeLayerIds(id, spec.sourceLayers),
+      style: { ...style },
+      ...(opacity != null ? { opacity } : {}),
+      metadata: {
+        sourceKind: "pmtiles-url",
+        sourceLayers: spec.sourceLayers,
+        tileType: "vector",
+        pickable: true,
+        datasetId: spec.id,
+        ocsUrl: state.ocsUrl,
+        pluginId: PLUGIN_ID,
+        ...(spec.attribution ? { attribution: spec.attribution } : {}),
+      },
+    });
+}
+
+/** Keep boundaries above the raster. The native raster is inserted beneath them through
+ * `beforeLayerId`; only when the host ignored that (GeoLibre before #3140, or the bundled
+ * fallback layer) do we re-register the boundaries on top, which briefly redraws them. */
+function keepVectorsOnTop(rasterLayerId: string | null): void {
+  if (state.vectors.size === 0 || !rasterLayerId) return;
+  if (rasterAboveVectors(rasterLayerId)) restackVectorLayers();
+}
+
+/** Re-register the boundaries so the host appends them on top again. Removes and re-adds
+ * their sources, so the boundaries blink; used only as the fallback above. */
+function restackVectorLayers(): void {
+  for (const spec of state.vectors.values()) {
+    // Carry over what the user set in the Style panel: the host has already applied it to
+    // the native layers, and re-registering from the collection style would discard it.
+    const style = currentVectorStyle(spec);
+    const opacity = state.app?.listLayers?.().find((l) => l.id === vectorLayerId(spec.id))?.opacity;
+    state.app?.unregisterExternalNativeLayer?.(vectorLayerId(spec.id));
+    registerVectorLayer(spec, style, opacity);
+  }
+}
+
+/** A boundary's paint as it is on the map now, falling back to the collection's outline
+ * style for anything the map does not report as a plain value. */
+function currentVectorStyle(spec: VectorSpec): VectorStyle {
+  const style: VectorStyle = { ...spec.style, fillOpacity: 0 };
+  const map = state.app?.getMap?.();
+  const [fillId, lineId] = pmtilesNativeLayerIds(vectorLayerId(spec.id), spec.sourceLayers);
+  if (!map?.getPaintProperty || !fillId || !lineId) return style;
+  const read = (layerId: string, name: string): unknown => {
+    try {
+      return map.getLayer(layerId) ? map.getPaintProperty?.(layerId, name) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const fillColor = read(fillId, "fill-color");
+  const fillOpacity = read(fillId, "fill-opacity");
+  const strokeColor = read(lineId, "line-color");
+  const strokeWidth = read(lineId, "line-width");
+  if (typeof fillColor === "string") style.fillColor = fillColor;
+  if (typeof fillOpacity === "number") style.fillOpacity = fillOpacity;
+  if (typeof strokeColor === "string") style.strokeColor = strokeColor;
+  if (typeof strokeWidth === "number") style.strokeWidth = strokeWidth;
+  return style;
+}
+
+function removeVectorLayer(collectionId: string): void {
+  vectorLoads.delete(collectionId); // cancels a load still in flight
+  if (!state.vectors.delete(collectionId)) return;
+  // Unregistering removes the store layer; the host then drops its native layers and source.
+  state.app?.unregisterExternalNativeLayer?.(vectorLayerId(collectionId));
+}
+
+/** Drop boundaries a restored selection does not include. `connect` keeps them when the
+ * instance is unchanged, so without this a restored project would keep extra boundaries. */
+function restoreVectorSelection(features: string[]): void {
+  for (const id of [...state.vectors.keys()]) {
+    if (!features.includes(id)) removeVectorLayer(id);
+  }
+}
+
+function removeAllVectorLayers(): void {
+  vectorLoads.clear();
+  for (const id of [...state.vectors.keys()]) removeVectorLayer(id);
 }
 
 function currentViewBbox(): [number, number, number, number] | null {
@@ -393,30 +598,64 @@ function applySavedSelector(spec: RenderSpec, saved: Record<string, number>): vo
   }
 }
 
+/** GeoLibre's Time Slider opens on the first period (so play runs forward from the start).
+ * Draw that period from the outset; starting at the latest would render it once and then
+ * jump to the first as soon as the slider binds, which shows as a flash. */
+function startAtFirstPeriod(spec: RenderSpec): void {
+  for (const dim of spec.dims) {
+    if (dim.isTemporal) dim.index = 0;
+  }
+}
+
+// Bumped by every dataset load and by clearing the dataset, so a load that finishes after
+// the user picked another dataset (or the placeholder) does not draw its layer.
+let datasetLoad = 0;
+
 async function loadDataset(datasetId: string, savedSelector?: Record<string, number>): Promise<void> {
   if (!state.ocsUrl) return;
+  const token = ++datasetLoad;
   setStatus(`Loading ${datasetId}…`);
   try {
     const collection = await fetchCollection(state.ocsUrl, datasetId);
+    if (token !== datasetLoad) return;
     const spec = buildRenderSpec(collection);
     if (savedSelector) applySavedSelector(spec, savedSelector);
+    else if (state.app?.registerTemporalLayer) startAtFirstPeriod(spec);
     const bbox = collection.extent?.spatial?.bbox?.[0] ?? null;
     state.datasetId = datasetId;
     state.spec = spec;
     state.style = { colormapName: spec.colormapName, clim: spec.clim, opacity: 1 };
-    await renderLayer(spec, bbox);
+    if (!(await renderLayer(spec, bbox, () => token === datasetLoad))) return;
     renderMeta(spec);
     renderDimControls(spec);
     renderLegend(spec);
     renderStyleControls(spec);
+    panel?.datasetSection.classList.remove("ocs-hidden");
     setStatus("");
   } catch (err) {
-    setStatus(`Failed to load ${datasetId}: ${(err as Error).message}`, true);
+    if (token === datasetLoad) setStatus(`Failed to load ${datasetId}: ${(err as Error).message}`, true);
   }
 }
 
+/** Drop the raster layer and hide its panel section, e.g. when the placeholder is chosen. */
+function clearDataset(): void {
+  datasetLoad++; // cancels a load still in flight
+  removeLayer();
+  state.datasetId = null;
+  state.spec = null;
+  state.selector = {};
+  panel?.datasetSection.classList.add("ocs-hidden");
+  if (panel) panel.collectionSelect.value = "";
+}
+
 async function connect(ocsUrl: string): Promise<void> {
-  state.ocsUrl = ocsUrl.trim();
+  const next = ocsUrl.trim();
+  // Layers from another instance would no longer match the panel; drop them.
+  if (next !== state.ocsUrl) {
+    removeAllVectorLayers();
+    clearDataset();
+  }
+  state.ocsUrl = next;
   if (!state.ocsUrl) {
     setStatus("Enter an Open Climate Service URL.", true);
     return;
@@ -430,10 +669,14 @@ async function connect(ocsUrl: string): Promise<void> {
     state.collections = collections;
     state.instanceExtent = extent;
     renderCollectionOptions();
+    renderVectorOptions();
     // Frame the instance extent up front, before any dataset is selected.
     if (extent && state.app?.fitBounds) state.app.fitBounds(extent.bbox);
     const where = extent?.name ? `${extent.name} — ` : "";
-    setStatus(collections.length ? `${where}${collections.length} datasets` : `${where}no published datasets`);
+    const rasters = collections.filter((c) => c.kind === "raster").length;
+    const vectors = collections.length - rasters;
+    const parts = [`${rasters} datasets`, ...(vectors ? [`${vectors} boundary layers`] : [])];
+    setStatus(collections.length ? `${where}${parts.join(", ")}` : `${where}no published datasets`);
   } catch (err) {
     setStatus(`Could not reach ${state.ocsUrl}/stac: ${(err as Error).message}`, true);
   }
@@ -448,13 +691,42 @@ function renderCollectionOptions(): void {
   const placeholder = el("option", undefined, "Select a dataset…");
   placeholder.value = "";
   sel.appendChild(placeholder);
-  for (const c of state.collections) {
+  for (const c of state.collections.filter((x) => x.kind === "raster")) {
     const opt = el("option", undefined, c.title);
     opt.value = c.id;
     sel.appendChild(opt);
   }
   sel.value = state.datasetId ?? "";
-  sel.disabled = state.collections.length === 0;
+  sel.disabled = !state.collections.some((c) => c.kind === "raster");
+}
+
+/** One checkbox per feature collection; each toggles its own vector layer. */
+function renderVectorOptions(): void {
+  if (!panel) return;
+  const host = panel.vectors;
+  host.replaceChildren();
+  const vectors = state.collections.filter((c) => c.kind === "vector");
+  host.classList.toggle("ocs-hidden", vectors.length === 0);
+  if (vectors.length === 0) return;
+  host.appendChild(el("span", "ocs-field-label", "Vector data"));
+  for (const c of vectors) {
+    const label = el("label", "ocs-check");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = state.vectors.has(c.id);
+    box.addEventListener("change", () => {
+      if (box.checked) {
+        void addVectorLayer(c.id).then((ok) => {
+          if (!ok) box.checked = false;
+        });
+      } else {
+        removeVectorLayer(c.id);
+      }
+    });
+    label.appendChild(box);
+    label.appendChild(el("span", undefined, c.title));
+    host.appendChild(label);
+  }
 }
 
 function renderMeta(spec: RenderSpec): void {
@@ -614,7 +886,16 @@ function renderPanel(container: HTMLElement): () => void {
   });
   urlRow.appendChild(el("label", "ocs-field-label", "Open Climate Service URL"));
   urlRow.appendChild(urlInput);
-  urlRow.appendChild(button("Connect", () => void connect(urlInput.value)));
+  const actions = el("div", "ocs-actions");
+  actions.appendChild(button("Connect", () => void connect(urlInput.value)));
+  const demo = button("Try Nepal demo", () => {
+    urlInput.value = DEMO_URL;
+    void connect(DEMO_URL);
+  });
+  demo.classList.add("ocs-btn-secondary");
+  demo.title = DEMO_URL;
+  actions.appendChild(demo);
+  urlRow.appendChild(actions);
   root.appendChild(urlRow);
 
   const status = el("div", "ocs-status");
@@ -622,31 +903,39 @@ function renderPanel(container: HTMLElement): () => void {
 
   const collectionSelect = el("select", "ocs-select");
   collectionSelect.disabled = true;
+  collectionSelect.setAttribute("aria-label", "Climate dataset");
   collectionSelect.addEventListener("change", () => {
     if (collectionSelect.value) void loadDataset(collectionSelect.value);
+    else clearDataset();
   });
   root.appendChild(collectionSelect);
 
+  const datasetSection = el("div", "ocs-dataset ocs-hidden");
   const meta = el("div", "ocs-meta");
   const dims = el("div", "ocs-dims ocs-hidden");
   const legend = el("div", "ocs-legend");
   const styleControls = el("div", "ocs-style");
-  root.appendChild(meta);
-  root.appendChild(dims);
-  root.appendChild(legend);
-  root.appendChild(styleControls);
+  datasetSection.append(meta, dims, legend, styleControls);
+  root.appendChild(datasetSection);
+
+  const vectors = el("div", "ocs-vectors ocs-hidden");
+  root.appendChild(vectors);
 
   container.appendChild(root);
-  panel = { status, collectionSelect, meta, dims, legend, styleControls };
+  panel = { datasetSection, status, collectionSelect, meta, dims, legend, styleControls, vectors };
 
   // Restore state if the panel is reopened after being built once.
-  if (state.collections.length) renderCollectionOptions();
+  if (state.collections.length) {
+    renderCollectionOptions();
+    renderVectorOptions();
+  }
   if (state.spec) {
     renderMeta(state.spec);
     renderDimControls(state.spec);
     renderLegend(state.spec);
     renderStyleControls(state.spec);
   }
+  datasetSection.classList.toggle("ocs-hidden", state.spec == null);
 
   return () => {
     panel = null;
@@ -663,7 +952,7 @@ export const plugin: GeoLibrePlugin = {
   // Injected from package.json at build time (see vite.geolibre.config.ts) so the
   // manifest, bundle, and package.json versions stay in lockstep.
   version: __OCS_PLUGIN_VERSION__,
-  urlParameterNames: [OCS_URL_PARAM, DATASET_PARAM],
+  urlParameterNames: [OCS_URL_PARAM, DATASET_PARAM, FEATURES_PARAM],
 
   activate(app) {
     state.app = app;
@@ -679,6 +968,7 @@ export const plugin: GeoLibrePlugin = {
 
   deactivate(app) {
     removeLayer();
+    removeAllVectorLayers();
     unregisterPanel?.();
     unregisterPanel = undefined;
     app.unregisterRightPanel?.(PANEL_ID);
@@ -690,14 +980,23 @@ export const plugin: GeoLibrePlugin = {
     state.app = app;
     const ocsUrl = params.get(OCS_URL_PARAM);
     const dataset = params.get(DATASET_PARAM);
+    const features = (params.get(FEATURES_PARAM) ?? "").split(",").map((f) => f.trim()).filter(Boolean);
     if (ocsUrl) {
       await connect(ocsUrl);
       if (dataset) await loadDataset(dataset);
+      restoreVectorSelection(features);
+      for (const id of features) await addVectorLayer(id);
+      renderVectorOptions();
     }
   },
 
   getProjectState() {
-    return { ocsUrl: state.ocsUrl, datasetId: state.datasetId, selector: state.selector };
+    return {
+      ocsUrl: state.ocsUrl,
+      datasetId: state.datasetId,
+      selector: state.selector,
+      features: [...state.vectors.keys()],
+    };
   },
 
   applyProjectState(app, raw) {
@@ -705,8 +1004,12 @@ export const plugin: GeoLibrePlugin = {
     const s = (raw ?? {}) as OcsProjectState;
     if (typeof s.ocsUrl === "string" && s.ocsUrl) {
       const savedSelector = s.selector && typeof s.selector === "object" ? s.selector : undefined;
-      void connect(s.ocsUrl).then(() => {
-        if (s.datasetId) return loadDataset(s.datasetId, savedSelector);
+      const features = Array.isArray(s.features) ? s.features.filter((f): f is string => typeof f === "string") : [];
+      void connect(s.ocsUrl).then(async () => {
+        if (s.datasetId) await loadDataset(s.datasetId, savedSelector);
+        restoreVectorSelection(features);
+        for (const id of features) await addVectorLayer(id);
+        renderVectorOptions();
       });
     }
   },

@@ -34,6 +34,8 @@ export interface GeoLibreZarrLayerOptions {
   proj4?: string;
   bounds?: [number, number, number, number];
   headers?: Record<string, string>;
+  /** Insert the new layer directly beneath the layer with this id (GeoLibre #3140). */
+  beforeLayerId?: string;
 }
 
 export type GeoLibreTimeGranularity = "hour" | "day" | "month" | "year";
@@ -57,6 +59,10 @@ export interface GeoLibreTemporalLayerAdapter {
 export interface GeoLibreAppAPI {
   // Native Zarr rendering through GeoLibre's own @carbonplan/zarr-layer (GeoLibre #1447).
   addZarrLayer?: (name: string, url: string, options: GeoLibreZarrLayerOptions) => Promise<string>;
+  /** Layers in the project with their visibility and opacity. */
+  listLayers?: () => Array<{ id: string; name: string; type: string; visible: boolean; opacity: number }>;
+  /** Current layer ids in the project, bottom to top. */
+  getLayers?: () => string[];
   setZarrLayerSelector?: (layerId: string, selector: Record<string, number | string>) => Promise<boolean>;
   // Bind a data-cube layer's time dimension to the native Time Slider (GeoLibre #1448).
   // `{ bind: true }` binds it immediately and opens the slider dock. Returns a detacher.
@@ -93,12 +99,29 @@ export interface GeoLibreMapControl {
   onRemove: () => void;
 }
 
+/** The flat per-layer vector style GeoLibre applies to a registered layer's native
+ * fill/line/circle layers; the plugin's keys win over user edits on (re-)registration. */
+export interface GeoLibreLayerStyle {
+  fillColor?: string;
+  fillOpacity?: number;
+  strokeColor?: string;
+  strokeWidth?: number;
+  minZoom?: number;
+  maxZoom?: number;
+}
+
 export interface GeoLibreExternalNativeLayerRegistration {
   id: string;
   name: string;
   type?: string;
   nativeLayerIds: string[];
   sourceIds?: string[];
+  // Host-rendered sources: with `type: "pmtiles"` and `metadata.sourceKind: "pmtiles-url"`,
+  // GeoLibre adds the PMTiles vector source and its fill/line/circle layers itself.
+  sourceId?: string;
+  source?: Record<string, unknown>;
+  sourcePath?: string;
+  style?: GeoLibreLayerStyle;
   beforeId?: string;
   opacity?: number;
   metadata?: Record<string, unknown>;
@@ -115,6 +138,7 @@ export interface GeoLibreMapLike {
   addLayer: (layer: unknown, beforeId?: string) => void;
   removeLayer: (id: string) => void;
   getLayer: (id: string) => unknown;
+  getPaintProperty?: (layerId: string, name: string) => unknown;
   moveLayer?: (id: string, beforeId?: string) => void;
   getStyle?: () => { layers?: Array<{ id: string; type: string }> };
   getBounds?: () => { toArray: () => [[number, number], [number, number]] };

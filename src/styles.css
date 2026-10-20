@@ -60,6 +60,41 @@
   background: #1d4ed8;
 }
 
+.ocs-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Secondary action next to Connect: neutral, theme-agnostic outline. */
+.ocs-btn.ocs-btn-secondary {
+  background: transparent;
+  color: inherit;
+  box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.5);
+}
+
+.ocs-btn.ocs-btn-secondary:hover {
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.ocs-dataset {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ocs-vectors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ocs-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
 .ocs-status {
   min-height: 16px;
   font-size: 12px;
