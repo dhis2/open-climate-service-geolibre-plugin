@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildVectorSpec, fetchCatalog, isVectorCollection, vectorStyleFromMapLibre } from "../src/ocs";
+import { buildVectorSpec, fetchCatalog, fetchCollection, isVectorCollection, vectorStyleFromMapLibre } from "../src/ocs";
 
 const BASE = "https://ocs-demo-nepal.dhis2.org";
 
-// Trimmed from the Nepal demo's /stac/collections/nepal_districts.
+// Trimmed from the Nepal demo's /stac/nepal_districts/collection.json.
 const districts = {
   id: "nepal_districts",
   title: "Districts (Overture Maps)",
@@ -92,11 +92,11 @@ describe("fetchCatalog", () => {
 
   it("marks the collections /features lists as vector", async () => {
     const responses: Record<string, unknown> = {
-      [`${BASE}/stac`]: {
+      [`${BASE}/stac/catalog.json`]: {
         links: [
-          { rel: "self", href: `${BASE}/stac` },
-          { rel: "child", href: `${BASE}/stac/collections/chirps3_precipitation_monthly`, title: "CHIRPS3" },
-          { rel: "child", href: `${BASE}/stac/collections/nepal_districts`, title: "Districts" },
+          { rel: "self", href: `${BASE}/stac/catalog.json` },
+          { rel: "child", href: `${BASE}/stac/chirps3_precipitation_monthly/collection.json`, title: "CHIRPS3" },
+          { rel: "child", href: `${BASE}/stac/nepal_districts/collection.json`, title: "Districts" },
         ],
       },
       [`${BASE}/features`]: { kind: "FeatureCollectionList", items: [{ id: "nepal_districts" }] },
@@ -116,12 +116,19 @@ describe("fetchCatalog", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
-        url.endsWith("/stac")
-          ? { ok: true, status: 200, json: async () => ({ links: [{ rel: "child", href: `${BASE}/stac/collections/a` }] }) }
+        url.endsWith("/stac/catalog.json")
+          ? { ok: true, status: 200, json: async () => ({ links: [{ rel: "child", href: `${BASE}/stac/a/collection.json` }] }) }
           : { ok: false, status: 404, json: async () => ({}) },
       ),
     );
     const catalog = await fetchCatalog(BASE);
-    expect(catalog).toEqual([{ id: "a", title: "a", href: `${BASE}/stac/collections/a`, kind: "raster" }]);
+    expect(catalog).toEqual([{ id: "a", title: "a", href: `${BASE}/stac/a/collection.json`, kind: "raster" }]);
+  });
+
+  it("fetches a collection from its collection.json", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ id: "a" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchCollection(`${BASE}/`, "a");
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/stac/a/collection.json`);
   });
 });
