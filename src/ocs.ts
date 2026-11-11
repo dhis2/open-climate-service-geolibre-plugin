@@ -223,19 +223,26 @@ export async function fetchFeatureCollectionIds(ocsUrl: string): Promise<Set<str
   }
 }
 
-/** Fetch a catalog's published collections from `<ocsUrl>/stac`. The STAC catalog lists
- * rasters and feature collections alike as `child` links; `/features` says which are
+/** The collection id in a child link: `<ocsUrl>/stac/<id>/collection.json`. */
+function collectionIdFromHref(href: string): string {
+  const segments = stripTrailingSlashes(href).split("/");
+  if (segments[segments.length - 1] === "collection.json") segments.pop();
+  return decodeURIComponent(segments.pop() ?? "");
+}
+
+/** Fetch a catalog's published collections from `<ocsUrl>/stac/catalog.json`. The STAC catalog
+ * lists rasters and feature collections alike as `child` links; `/features` says which are
  * vector, so the panel can offer them separately without fetching every collection. */
 export async function fetchCatalog(ocsUrl: string): Promise<OcsCollectionSummary[]> {
   const base = stripTrailingSlashes(ocsUrl);
-  const [res, featureIds] = await Promise.all([fetch(`${base}/stac`), fetchFeatureCollectionIds(base)]);
+  const [res, featureIds] = await Promise.all([fetch(`${base}/stac/catalog.json`), fetchFeatureCollectionIds(base)]);
   if (!res.ok) throw new Error(`STAC catalog fetch failed (HTTP ${res.status})`);
   const cat = (await res.json()) as StacJson;
   const links: StacJson[] = Array.isArray(cat.links) ? cat.links : [];
   return links
     .filter((l) => l.rel === "child")
     .map((l): OcsCollectionSummary => {
-      const id = stripTrailingSlashes(String(l.href)).split("/").pop() ?? "";
+      const id = collectionIdFromHref(String(l.href));
       return {
         id,
         title: typeof l.title === "string" && l.title ? l.title : id,
@@ -324,10 +331,10 @@ export function buildVectorSpec(collection: StacJson, style: StacJson | null = n
   };
 }
 
-/** Fetch a single collection document from `<ocsUrl>/stac/collections/<id>`. */
+/** Fetch a single collection document from `<ocsUrl>/stac/<id>/collection.json`. */
 export async function fetchCollection(ocsUrl: string, datasetId: string): Promise<StacJson> {
   const base = stripTrailingSlashes(ocsUrl);
-  const res = await fetch(`${base}/stac/collections/${encodeURIComponent(datasetId)}`);
+  const res = await fetch(`${base}/stac/${encodeURIComponent(datasetId)}/collection.json`);
   if (!res.ok) throw new Error(`Collection '${datasetId}' fetch failed (HTTP ${res.status})`);
   return (await res.json()) as StacJson;
 }
