@@ -37,7 +37,7 @@
     "@types/node": "^24.0.10",
     "archiver": "^7.0.1",
     "typescript": "^5.8.3",
-    "vite": "^7.0.0",
+    "vite": "^7.3.7",
     "vitest": "^3.2.4"
   }
 }
