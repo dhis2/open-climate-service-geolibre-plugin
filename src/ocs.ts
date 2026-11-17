@@ -1,4 +1,4 @@
-// Open Climate Service STAC client: list a catalog's collections and turn a
+// Open Geo Service STAC client: list a catalog's collections and turn a
 // collection document into everything zarr-layer (rasters) or GeoLibre's PMTiles
 // rendering (feature collections) needs to draw it. Mirrors the logic in the OCS
 // `/map` viewer so behaviour stays consistent across clients.

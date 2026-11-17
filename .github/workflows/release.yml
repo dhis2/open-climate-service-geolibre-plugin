@@ -65,7 +65,7 @@ jobs:
         run: |
           VERSION="${{ steps.check.outputs.version }}"
           gh release create "v$VERSION" \
-            "geolibre-plugin/open-climate-service-${VERSION}.zip" \
+            "geolibre-plugin/open-geo-service-${VERSION}.zip" \
             --target "$GITHUB_SHA" \
             --title "v$VERSION" \
             --generate-notes

@@ -1,8 +1,8 @@
-# Open Climate Service — GeoLibre plugin
+# Open Geo Service — GeoLibre plugin
 
-A [GeoLibre](https://geolibre.app/) plugin that browses an **Open Climate Service** (OCS) STAC catalog and renders its published climate datasets and boundary layers — taking the CRS, time axis, variable and style straight from the metadata, so nothing has to be entered by hand.
+A [GeoLibre](https://geolibre.app/) plugin that browses an **Open Geo Service** STAC catalog and renders its published climate datasets and boundary layers — taking the CRS, time axis, variable and style straight from the metadata, so nothing has to be entered by hand.
 
-Learn more about Open Climate Service: **<https://dhis2.github.io/open-climate-service/>**
+Learn more about Open Geo Service: **<https://dhis2.github.io/open-geo-service/>**
 
 ![The plugin rendering a daily mean temperature anomaly over Norway in GeoLibre](docs/ocs-plugin.png)
 
@@ -22,13 +22,13 @@ Learn more about Open Climate Service: **<https://dhis2.github.io/open-climate-s
 Requires GeoLibre 2.4 or later: the plugin draws climate datasets with GeoLibre's own Zarr
 renderer and binds their time axis to GeoLibre's Time Slider.
 
-Download the latest `open-climate-service-<version>.zip` from the
-[**Releases**](https://github.com/dhis2/open-climate-service-geolibre-plugin/releases) page, then in
+Download the latest `open-geo-service-<version>.zip` from the
+[**Releases**](https://github.com/dhis2/geolibre-geoservice-plugin/releases) page, then in
 GeoLibre go to **Settings → Manage Plugins → Install from file** and select the zip.
 
 ## Usage
 
-1. Activate **Open Climate Service** from GeoLibre's **Plugins** menu.
+1. Activate **Open Geo Service** from GeoLibre's **Plugins** menu.
 2. In the panel, enter your OCS instance URL and click **Connect** — the map frames the
    instance's region. To try the plugin without your own instance, click **Try Nepal demo**,
    which connects to the public demo at <https://ocs-demo-nepal.dhis2.org/>.
@@ -52,7 +52,7 @@ climate datasets work either way.
 
 ```bash
 npm install
-npm run package:geolibre   # typecheck + build + zip → geolibre-plugin/open-climate-service-<version>.zip
+npm run package:geolibre   # typecheck + build + zip → geolibre-plugin/open-geo-service-<version>.zip
 ```
 
 Then install the generated zip as above, or point GeoLibre at the unpacked `geolibre-plugin/` directory.
@@ -75,7 +75,7 @@ the version doesn't create a release, so the same version is never published twi
 ## Status
 
 Under active development — see the tracking issue
-[dhis2/open-climate-service#301](https://github.com/dhis2/open-climate-service/issues/301).
+[dhis2/open-geo-service#301](https://github.com/dhis2/open-geo-service/issues/301).
 
 ## License
 
