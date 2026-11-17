@@ -37,7 +37,7 @@ describe("buildRenderSpec", () => {
       default: {
         rescale: [[-30, 40]],
         colormap_name: "RdBu_r",
-        "open_climate_service:variable": "t2m",
+        "ogs:variable": "t2m",
       },
     },
     "cube:variables": { t2m: { unit: "degC" } },

@@ -153,7 +153,7 @@ function steppingDimKeys(dimensions: StacJson): string[] {
 }
 
 function controlForDim(dim: StacJson): DimControl {
-  const hint = dim["open_climate_service:control"];
+  const hint = dim["ogs:control"];
   if (hint === "slider" || hint === "dropdown") return hint;
   if (dim.type === "temporal" || typeof dim.step === "number") return "slider";
   return "dropdown";
@@ -351,7 +351,7 @@ export function buildRenderSpec(collection: StacJson): RenderSpec {
   const colormapName: string = renders.colormap_name ?? "viridis";
   const fillValue: number | null = renders.nodata ?? null;
   const variable: string =
-    renders["open_climate_service:variable"] ?? Object.keys(collection["cube:variables"] ?? {})[0] ?? "data";
+    renders["ogs:variable"] ?? Object.keys(collection["cube:variables"] ?? {})[0] ?? "data";
 
   const dimensions: StacJson = collection["cube:dimensions"] ?? {};
   const dims: DimState[] = steppingDimKeys(dimensions)
