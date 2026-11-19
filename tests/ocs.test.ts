@@ -40,7 +40,8 @@ describe("buildRenderSpec", () => {
         "ogs:variable": "t2m",
       },
     },
-    "cube:variables": { t2m: { unit: "degC" } },
+    // t2m is not first, so the variable must come from ogs:variable, not the fallback.
+    "cube:variables": { d2m: { unit: "K" }, t2m: { unit: "degC" } },
     "cube:dimensions": {
       x: { type: "spatial", axis: "x" },
       y: { type: "spatial", axis: "y" },
