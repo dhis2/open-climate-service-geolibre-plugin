@@ -135,7 +135,6 @@ function buildZarrOptions(spec: RenderSpec): GeoLibreZarrLayerOptions {
     opacity: state.style.opacity,
     ...(zarrVersion != null ? { zarrVersion } : {}),
     ...(spec.crs ? { crs: spec.crs } : {}),
-    ...(spec.proj4 != null ? { proj4: spec.proj4 } : {}),
     ...(spec.bounds ? { bounds: spec.bounds } : {}),
     ...(lowestVectorLayerId() ? { beforeLayerId: lowestVectorLayerId() } : {}),
   };

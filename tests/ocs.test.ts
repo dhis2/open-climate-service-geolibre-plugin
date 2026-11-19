@@ -66,15 +66,9 @@ describe("buildRenderSpec", () => {
     expect(spec.dims.find((d) => d.key === "member")?.control).toBe("slider");
   });
 
-  it("prefers a published proj4 hint for projected stores", () => {
-    const utm = {
-      ...collection,
-      "proj:code": "EPSG:32633",
-      "open_climate_service:proj4": "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs",
-    };
-    const spec = buildRenderSpec(utm);
+  it("passes a projected store's proj:code through as its CRS", () => {
+    const spec = buildRenderSpec({ ...collection, "proj:code": "EPSG:32633" });
     expect(spec.crs).toBe("EPSG:32633");
-    expect(spec.proj4).toContain("proj=utm");
   });
 
   it("throws when the collection has no zarr asset", () => {

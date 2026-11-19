@@ -57,7 +57,6 @@ export interface RenderSpec {
   colormapName: string;
   fillValue: number | null;
   crs: string;
-  proj4: string | null;
   bounds: [number, number, number, number] | null;
   zarrVersion: number | null;
   units: string;
@@ -367,7 +366,6 @@ export function buildRenderSpec(collection: StacJson): RenderSpec {
     .filter((d) => d.count >= 1);
 
   const crs = normalizeCrs(collection["proj:code"] ?? "EPSG:4326");
-  const proj4: string | null = collection["open_climate_service:proj4"] ?? null;
   // proj:bbox is the native-CRS extent; passing it as zarr-layer `bounds` avoids a
   // render-time fetch of the x/y coordinate arrays to derive them.
   const rawBbox = collection["proj:bbox"];
@@ -376,13 +374,12 @@ export function buildRenderSpec(collection: StacJson): RenderSpec {
       ? [rawBbox[0], rawBbox[1], rawBbox[2], rawBbox[3]]
       : null;
   const zarrVersion: number | null = zarr["zarr:zarr_format"] ?? null;
-  // Units come from the datacube-standard cube:variables[<var>].unit (OCS no longer
-  // emits a custom open_climate_service:units render field).
+  // Units come from the datacube-standard cube:variables[<var>].unit.
   const units: string = collection["cube:variables"]?.[variable]?.unit ?? "";
   const keywords: string[] = Array.isArray(collection.keywords) ? collection.keywords : [];
   const source =
     keywords.find((k) => k !== "zarr" && k !== "stac" && k !== variable && k !== collection.id) ?? null;
   const temporalResolution = temporalResolutionLabel(dimensions);
 
-  return { datasetId: collection.id, zarrHref: zarr.href, variable, clim, colormapName, fillValue, crs, proj4, bounds, zarrVersion, units, source, temporalResolution, dims };
+  return { datasetId: collection.id, zarrHref: zarr.href, variable, clim, colormapName, fillValue, crs, bounds, zarrVersion, units, source, temporalResolution, dims };
 }
