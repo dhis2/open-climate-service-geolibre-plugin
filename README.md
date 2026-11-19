@@ -31,7 +31,7 @@ GeoLibre go to **Settings → Manage Plugins → Install from file** and select 
 1. Activate **Open Geo Service** from GeoLibre's **Plugins** menu.
 2. In the panel, enter your OCS instance URL and click **Connect** — the map frames the
    instance's region. To try the plugin without your own instance, click **Try Nepal demo**,
-   which connects to the public demo at <https://ocs-demo-nepal.dhis2.org/>.
+   which connects to the public demo at <https://geoservice.dhis2.org/nepal>.
 3. Pick a dataset to draw it as a layer.
 4. Tick one or more layers under **Vector data** to draw them on the map.
 5. Step through periods with the **time slider** at the bottom of the map, and adjust the
@@ -41,7 +41,7 @@ A link that opens GeoLibre with the demo, monthly precipitation anomalies and Ne
 districts:
 
 ```
-?ocsUrl=https://ocs-demo-nepal.dhis2.org&dataset=chirps3_precipitation_monthly_anomaly_1991_2020&features=nepal_districts
+?ocsUrl=https://geoservice.dhis2.org/nepal&dataset=chirps3_precipitation_monthly_anomaly_1991_2020&features=nepal_districts
 ```
 
 `features` takes a comma-separated list of feature collection ids. Boundary layers need a

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildVectorSpec, fetchCatalog, fetchCollection, isVectorCollection, vectorStyleFromMapLibre } from "../src/ocs";
 
-const BASE = "https://ocs-demo-nepal.dhis2.org";
+const BASE = "https://geoservice.dhis2.org/nepal";
 
 // Trimmed from the Nepal demo's /stac/nepal_districts/collection.json.
 const districts = {

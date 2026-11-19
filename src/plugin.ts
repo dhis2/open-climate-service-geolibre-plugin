@@ -22,7 +22,7 @@ const OCS_URL_PARAM = "ocsUrl";
 const DATASET_PARAM = "dataset";
 const FEATURES_PARAM = "features";
 // The public Open Geo Service demo (Nepal), offered as a one-click way to try the plugin.
-const DEMO_URL = "https://ocs-demo-nepal.dhis2.org";
+const DEMO_URL = "https://geoservice.dhis2.org/nepal";
 
 interface PluginState {
   app?: GeoLibreAppAPI;
