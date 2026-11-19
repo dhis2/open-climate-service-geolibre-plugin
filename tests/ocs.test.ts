@@ -46,10 +46,12 @@ describe("buildRenderSpec", () => {
       x: { type: "spatial", axis: "x" },
       y: { type: "spatial", axis: "y" },
       t: { type: "temporal", extent: ["2026-01-01", "2026-01-05"], step: "P1D" },
+      // A non-temporal dimension defaults to a dropdown, so a slider here must come from ogs:control.
+      member: { type: "other", values: ["a", "b", "c"], "ogs:control": "slider" },
     },
   };
 
-  it("derives variable, clim, crs, units and a temporal slider", () => {
+  it("derives variable, clim, crs, units and the dimension controls", () => {
     const spec = buildRenderSpec(collection);
     expect(spec.variable).toBe("t2m");
     expect(spec.clim).toEqual([-30, 40]);
@@ -61,6 +63,7 @@ describe("buildRenderSpec", () => {
     expect(t?.control).toBe("slider");
     expect(t?.count).toBe(5);
     expect(t?.index).toBe(4); // slider defaults to the latest step
+    expect(spec.dims.find((d) => d.key === "member")?.control).toBe("slider");
   });
 
   it("prefers a published proj4 hint for projected stores", () => {
