@@ -16,13 +16,13 @@ import {
 } from "./ocs";
 import type { GeoLibreAppAPI, GeoLibrePlugin, GeoLibreTimeGranularity, GeoLibreZarrLayerOptions } from "./types/geolibre";
 
-const PLUGIN_ID = "open-climate-service";
+const PLUGIN_ID = "open-geo-service";
 const PANEL_ID = "ocs-panel";
 const OCS_URL_PARAM = "ocsUrl";
 const DATASET_PARAM = "dataset";
 const FEATURES_PARAM = "features";
-// The public Open Climate Service demo (Nepal), offered as a one-click way to try the plugin.
-const DEMO_URL = "https://ocs-demo-nepal.dhis2.org";
+// The public Open Geo Service demo (Nepal), offered as a one-click way to try the plugin.
+const DEMO_URL = "https://geoservice.dhis2.org/nepal";
 
 interface PluginState {
   app?: GeoLibreAppAPI;
@@ -135,7 +135,6 @@ function buildZarrOptions(spec: RenderSpec): GeoLibreZarrLayerOptions {
     opacity: state.style.opacity,
     ...(zarrVersion != null ? { zarrVersion } : {}),
     ...(spec.crs ? { crs: spec.crs } : {}),
-    ...(spec.proj4 != null ? { proj4: spec.proj4 } : {}),
     ...(spec.bounds ? { bounds: spec.bounds } : {}),
     ...(lowestVectorLayerId() ? { beforeLayerId: lowestVectorLayerId() } : {}),
   };
@@ -596,7 +595,7 @@ async function connect(ocsUrl: string): Promise<void> {
   }
   state.ocsUrl = next;
   if (!state.ocsUrl) {
-    setStatus("Enter an Open Climate Service URL.", true);
+    setStatus("Enter an Open Geo Service URL.", true);
     return;
   }
   setStatus("Connecting…");
@@ -823,7 +822,7 @@ function renderPanel(container: HTMLElement): () => void {
   urlInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") void connect(urlInput.value);
   });
-  urlRow.appendChild(el("label", "ocs-field-label", "Open Climate Service URL"));
+  urlRow.appendChild(el("label", "ocs-field-label", "Open Geo Service URL"));
   urlRow.appendChild(urlInput);
   const actions = el("div", "ocs-actions");
   actions.appendChild(button("Connect", () => void connect(urlInput.value)));
@@ -887,7 +886,7 @@ let unregisterPanel: (() => void) | undefined;
 
 export const plugin: GeoLibrePlugin = {
   id: PLUGIN_ID,
-  name: "Open Climate Service",
+  name: "Open Geo Service",
   // Injected from package.json at build time (see vite.geolibre.config.ts) so the
   // manifest, bundle, and package.json versions stay in lockstep.
   version: __OCS_PLUGIN_VERSION__,
@@ -897,7 +896,7 @@ export const plugin: GeoLibrePlugin = {
     state.app = app;
     unregisterPanel = app.registerRightPanel?.({
       id: PANEL_ID,
-      title: "Open Climate Service",
+      title: "Open Geo Service",
       dock: "right-of-layers",
       defaultWidth: 320,
       render: (container) => renderPanel(container),

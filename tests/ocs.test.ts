@@ -37,18 +37,21 @@ describe("buildRenderSpec", () => {
       default: {
         rescale: [[-30, 40]],
         colormap_name: "RdBu_r",
-        "open_climate_service:variable": "t2m",
+        "ogs:variable": "t2m",
       },
     },
-    "cube:variables": { t2m: { unit: "degC" } },
+    // t2m is not first, so the variable must come from ogs:variable, not the fallback.
+    "cube:variables": { d2m: { unit: "K" }, t2m: { unit: "degC" } },
     "cube:dimensions": {
       x: { type: "spatial", axis: "x" },
       y: { type: "spatial", axis: "y" },
       t: { type: "temporal", extent: ["2026-01-01", "2026-01-05"], step: "P1D" },
+      // A non-temporal dimension defaults to a dropdown, so a slider here must come from ogs:control.
+      member: { type: "other", values: ["a", "b", "c"], "ogs:control": "slider" },
     },
   };
 
-  it("derives variable, clim, crs, units and a temporal slider", () => {
+  it("derives variable, clim, crs, units and the dimension controls", () => {
     const spec = buildRenderSpec(collection);
     expect(spec.variable).toBe("t2m");
     expect(spec.clim).toEqual([-30, 40]);
@@ -60,17 +63,12 @@ describe("buildRenderSpec", () => {
     expect(t?.control).toBe("slider");
     expect(t?.count).toBe(5);
     expect(t?.index).toBe(4); // slider defaults to the latest step
+    expect(spec.dims.find((d) => d.key === "member")?.control).toBe("slider");
   });
 
-  it("prefers a published proj4 hint for projected stores", () => {
-    const utm = {
-      ...collection,
-      "proj:code": "EPSG:32633",
-      "open_climate_service:proj4": "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs",
-    };
-    const spec = buildRenderSpec(utm);
+  it("passes a projected store's proj:code through as its CRS", () => {
+    const spec = buildRenderSpec({ ...collection, "proj:code": "EPSG:32633" });
     expect(spec.crs).toBe("EPSG:32633");
-    expect(spec.proj4).toContain("proj=utm");
   });
 
   it("throws when the collection has no zarr asset", () => {

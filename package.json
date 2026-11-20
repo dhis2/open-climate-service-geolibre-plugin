@@ -1,22 +1,22 @@
 {
-  "name": "open-climate-service-geolibre-plugin",
-  "version": "0.3.8",
-  "description": "GeoLibre plugin that browses an Open Climate Service STAC catalog and renders its published GeoZarr datasets.",
+  "name": "geolibre-geoservice-plugin",
+  "version": "0.3.9",
+  "description": "GeoLibre plugin that browses an Open Geo Service STAC catalog and renders its published GeoZarr datasets.",
   "type": "module",
   "private": true,
   "license": "MIT",
-  "homepage": "https://github.com/dhis2/open-climate-service-geolibre-plugin#readme",
+  "homepage": "https://github.com/dhis2/geolibre-geoservice-plugin#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dhis2/open-climate-service-geolibre-plugin.git"
+    "url": "git+https://github.com/dhis2/geolibre-geoservice-plugin.git"
   },
   "bugs": {
-    "url": "https://github.com/dhis2/open-climate-service/issues"
+    "url": "https://github.com/dhis2/open-geo-service/issues"
   },
   "keywords": [
     "geolibre",
     "geolibre-plugin",
-    "open-climate-service",
+    "open-geo-service",
     "stac",
     "zarr",
     "geozarr",
